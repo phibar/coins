@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ──────────────────────────────────────────
+// Core Models
+// ──────────────────────────────────────────
+
+model Coin {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Required fields
+  country     String
+  denomination String
+  year        Int
+
+  // Optional identification
+  mintMark String? @map("mint_mark")
+
+  // Physical properties
+  material  String?
+  fineness  Float?
+  weight    Float?
+  diameter  Float?
+  thickness Float?
+
+  // Condition & special attributes
+  condition     CoinCondition?
+  isProof       Boolean @default(false) @map("is_proof")
+  isFirstDay    Boolean @default(false) @map("is_first_day")
+  hasCase       Boolean @default(false) @map("has_case")
+  hasCertificate Boolean @default(false) @map("has_certificate")
+
+  // Edge
+  edgeType String? @map("edge_type")
+
+  // Mintage
+  mintage Int?
+
+  // Organization
+  storageLocation String? @map("storage_location")
+  notes           String?
+  tags            String[] @default([])
+
+  // Numista integration
+  numistaTypeId   Int?      @map("numista_type_id")
+  numistaTitle    String?   @map("numista_title")
+  numistaUrl      String?   @map("numista_url")
+  numistaLastSync DateTime? @map("numista_last_sync")
+
+  // Numista structured data (scalar)
+  shape              String?  @map("shape")
+  orientation        String?  @map("orientation")
+  technique          String?  @map("technique")
+  series             String?  @map("series")
+  commemoratedTopic  String?  @map("commemorated_topic")
+  isDemonetized      Boolean  @default(false) @map("is_demonetized")
+  demonetizationDate String?  @map("demonetization_date")
+  comments           String?  @map("comments")
+
+  // Estimated value (queryable for dashboard aggregation)
+  estimatedValue    Float?   @map("estimated_value")
+  estimatedCurrency String?  @default("EUR") @map("estimated_currency")
+
+  // Numista reference images
+  numistaObverseThumbnail String? @map("numista_obverse_thumbnail")
+  numistaReverseThumbnail String? @map("numista_reverse_thumbnail")
+
+  // Numista complex data (Json = PostgreSQL jsonb)
+  numistaObverse      Json? @map("numista_obverse")       // {description, lettering, engravers}
+  numistaReverse      Json? @map("numista_reverse")       // {description, lettering, engravers}
+  numistaReferences   Json? @map("numista_references")    // [{catalogue: {code}, number}]
+  numistaMints        Json? @map("numista_mints")         // [{id, name}]
+  numistaRuler        Json? @map("numista_ruler")         // [{id, name}]
+  numistaIssues       Json? @map("numista_issues")        // [{id, year, mint_letter, mintage}]
+  numistaPrices       Json? @map("numista_prices")        // {currency, prices: [{grade, price}]}
+  numistaRelatedTypes Json? @map("numista_related_types") // [{id, title, category}]
+
+  // Relations
+  images    CoinImage[]
+  session   CaptureSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?         @map("session_id")
+
+  @@index([country])
+  @@index([year])
+  @@index([country, denomination, year])
+  @@index([estimatedValue])
+  @@map("coins")
+}
+
+model CoinImage {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now()) @map("created_at")
+
+  type         ImageType
+  url          String
+  thumbnailUrl String    @map("thumbnail_url")
+  s3Key        String    @map("s3_key")
+  s3KeyThumb   String    @map("s3_key_thumb")
+  width        Int?
+  height       Int?
+  sortOrder    Int       @default(0) @map("sort_order")
+
+  coin   Coin   @relation(fields: [coinId], references: [id], onDelete: Cascade)
+  coinId String @map("coin_id")
+
+  @@index([coinId])
+  @@map("coin_images")
+}
+
+model CaptureSession {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  // Session-persistent form defaults
+  country      String?
+  denomination String?
+  year         Int?
+  mintMark     String?  @map("mint_mark")
+  material     String?
+  fineness     Float?
+  condition    CoinCondition?
+  storageLocation String? @map("storage_location")
+  tags         String[] @default([])
+
+  // Session state
+  isActive Boolean @default(true) @map("is_active")
+  coins    Coin[]
+
+  @@map("capture_sessions")
+}
+
+// ──────────────────────────────────────────
+// Enums
+// ──────────────────────────────────────────
+
+enum CoinCondition {
+  s     // schoen (fair)
+  ss    // sehr schoen (very fine)
+  vz    // vorzueglich (extremely fine)
+  st    // Stempelglanz (uncirculated)
+  stgl  // Stempelglanz (alternative)
+  PP    // Polierte Platte (proof)
+}
+
+enum ImageType {
+  obverse  // Vorderseite
+  reverse  // Rueckseite
+  edge     // Rand
+  other    // Sonstiges
+}

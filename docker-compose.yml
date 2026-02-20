@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: muenzsammlung-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: muenzsammlung
+      POSTGRES_USER: muenzsammlung
+      POSTGRES_PASSWORD: muenzsammlung_dev
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+volumes:
+  pgdata:

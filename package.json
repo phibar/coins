@@ -1,0 +1,29 @@
+{
+  "name": "muenzsammlung",
+  "private": true,
+  "packageManager": "pnpm@10.28.1",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "esbuild",
+      "prisma",
+      "sharp"
+    ]
+  },
+  "scripts": {
+    "dev": "concurrently -n web,camera -c blue,green \"pnpm --filter web dev\" \"pnpm --filter camera-service dev\"",
+    "dev:web": "pnpm --filter web dev",
+    "dev:camera": "pnpm --filter camera-service dev",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:migrate": "pnpm --filter web exec prisma migrate dev",
+    "db:studio": "pnpm --filter web exec prisma studio",
+    "db:push": "pnpm --filter web exec prisma db push",
+    "db:seed": "pnpm --filter web exec prisma db seed",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
