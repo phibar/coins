@@ -8,16 +8,50 @@ const execFileAsync = promisify(execFile);
 
 let isCapturing = false;
 
-export async function ensureJpegMode(): Promise<void> {
+export async function ensureMaxQuality(): Promise<void> {
   try {
-    const { stdout } = await execFileAsync("gphoto2", [
-      "--get-config",
-      "imagequality",
-    ]);
-    if (!stdout.includes("Current: Fine") && !stdout.includes("Current: Standard")) {
-      console.log("Setting camera to JPEG Fine mode...");
-      await execFileAsync("gphoto2", ["--set-config", "imagequality=Fine"]);
-      console.log("Camera set to JPEG Fine.");
+    // Set highest JPEG quality
+    try {
+      const { stdout } = await execFileAsync("gphoto2", [
+        "--get-config",
+        "imagequality",
+      ]);
+      // Prefer "Fine" or "Extra Fine" (Sony) / "Superfine" (Canon)
+      if (stdout.includes("Extra Fine")) {
+        await execFileAsync("gphoto2", [
+          "--set-config",
+          "imagequality=Extra Fine",
+        ]);
+        console.log("Camera set to JPEG Extra Fine.");
+      } else if (
+        !stdout.includes("Current: Fine") &&
+        !stdout.includes("Current: Extra Fine")
+      ) {
+        await execFileAsync("gphoto2", ["--set-config", "imagequality=Fine"]);
+        console.log("Camera set to JPEG Fine.");
+      }
+    } catch {
+      // imagequality config not supported
+    }
+
+    // Set largest image size
+    try {
+      const { stdout } = await execFileAsync("gphoto2", [
+        "--get-config",
+        "imagesize",
+      ]);
+      // Pick the first choice (typically largest)
+      const match = stdout.match(/Choice: 0 (.+)/);
+      const current = stdout.match(/Current: (.+)/);
+      if (match && current && match[1].trim() !== current[1].trim()) {
+        await execFileAsync("gphoto2", [
+          "--set-config",
+          `imagesize=${match[1].trim()}`,
+        ]);
+        console.log(`Camera image size set to ${match[1].trim()}.`);
+      }
+    } catch {
+      // imagesize config not supported
     }
   } catch {
     // Camera might not be connected yet, skip

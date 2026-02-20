@@ -172,6 +172,41 @@ export async function getTypeIssues(
   return response.json();
 }
 
+export interface NumistaImageSearchResult {
+  count: number;
+  types: NumistaTypePreview[];
+  experimental_tentative_year?: number | null;
+  experimental_tentative_grade?: string | null;
+}
+
+export async function searchByImage(
+  images: { image_data: string; mime_type: string }[],
+  maxResults: number = 20
+): Promise<NumistaImageSearchResult> {
+  const response = await fetch(
+    `${NUMISTA_BASE_URL}/search_by_image?lang=en&activate_experimental_features=true`,
+    {
+      method: "POST",
+      headers: {
+        "Numista-API-Key": getApiKey(),
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        category: "coin",
+        images,
+        max_results: maxResults,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Numista image search error: ${response.status} ${body}`);
+  }
+
+  return response.json();
+}
+
 export async function getIssuePrices(
   typeId: number,
   issueId: number

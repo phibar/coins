@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useCallback } from "react";
+import { useRef, useCallback, useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCaptureSession } from "@/hooks/use-capture-session";
@@ -10,6 +10,7 @@ import { GridConfigPanel } from "./_components/grid-config-panel";
 import { CoinForm } from "./_components/coin-form";
 import type { CoinFormData, CropRect } from "@/types/capture";
 import { toast } from "sonner";
+import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
 
 export default function CapturePage() {
   const { state, dispatch, capturePhoto, captureBackPhoto, loadTestImage } = useCaptureSession();
@@ -30,7 +31,6 @@ export default function CapturePage() {
       if (!file) return;
 
       if (state.mode === "single") {
-        // Single coin: load directly without flipping, need dimensions
         const url = URL.createObjectURL(file);
         const img = new Image();
         img.onload = () => {
@@ -45,31 +45,49 @@ export default function CapturePage() {
         return;
       }
 
-      // Grid mode: flip the back image for grid alignment
+      // Grid mode: optionally flip, then load dimensions
       const reader = new FileReader();
       reader.onload = async () => {
         try {
           const arrayBuffer = reader.result as ArrayBuffer;
-          const response = await fetch("/api/images/flip", {
-            method: "POST",
-            body: arrayBuffer,
-            headers: { "Content-Type": "application/octet-stream" },
+          let finalUrl: string;
+
+          if (state.flipMode === "book") {
+            const response = await fetch("/api/images/flip", {
+              method: "POST",
+              body: arrayBuffer,
+              headers: { "Content-Type": "application/octet-stream" },
+            });
+            if (!response.ok) throw new Error("Flip failed");
+            const flippedBlob = await response.blob();
+            finalUrl = URL.createObjectURL(flippedBlob);
+            toast.success("Rückseite geladen und gespiegelt");
+          } else {
+            const blob = new Blob([arrayBuffer], { type: file.type });
+            finalUrl = URL.createObjectURL(blob);
+            toast.success("Rückseite geladen");
+          }
+
+          const img = new window.Image();
+          await new Promise<void>((resolve, reject) => {
+            img.onload = () => resolve();
+            img.onerror = () => reject(new Error("Image load failed"));
+            img.src = finalUrl;
           });
 
-          if (!response.ok) throw new Error("Flip failed");
-
-          const flippedBlob = await response.blob();
-          const url = URL.createObjectURL(flippedBlob);
-
-          dispatch({ type: "BACK_CAPTURE_COMPLETE", photo: url });
-          toast.success("Rückseite geladen und gespiegelt");
+          dispatch({
+            type: "BACK_CAPTURE_COMPLETE",
+            photo: finalUrl,
+            width: img.naturalWidth,
+            height: img.naturalHeight,
+          });
         } catch {
           toast.error("Fehler beim Laden der Rückseite");
         }
       };
       reader.readAsArrayBuffer(file);
     },
-    [dispatch, state.mode]
+    [dispatch, state.mode, state.flipMode]
   );
 
   const handleCaptureBack = useCallback(async () => {
@@ -79,26 +97,43 @@ export default function CapturePage() {
       if (!response.ok) throw new Error("Capture failed");
 
       const blob = await response.blob();
-      const arrayBuffer = await blob.arrayBuffer();
+      let finalUrl: string;
 
-      // Flip the back image
-      const flipResponse = await fetch("/api/images/flip", {
-        method: "POST",
-        body: arrayBuffer,
-        headers: { "Content-Type": "application/octet-stream" },
+      if (state.flipMode === "book") {
+        // Flip the back image horizontally (book-flip)
+        const arrayBuffer = await blob.arrayBuffer();
+        const flipResponse = await fetch("/api/images/flip", {
+          method: "POST",
+          body: arrayBuffer,
+          headers: { "Content-Type": "application/octet-stream" },
+        });
+        if (!flipResponse.ok) throw new Error("Flip failed");
+        const flippedBlob = await flipResponse.blob();
+        finalUrl = URL.createObjectURL(flippedBlob);
+      } else {
+        // "turn" mode: no flipping
+        finalUrl = URL.createObjectURL(blob);
+      }
+
+      // Load dimensions
+      const img = new window.Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load failed"));
+        img.src = finalUrl;
       });
 
-      if (!flipResponse.ok) throw new Error("Flip failed");
-
-      const flippedBlob = await flipResponse.blob();
-      const url = URL.createObjectURL(flippedBlob);
-
-      dispatch({ type: "BACK_CAPTURE_COMPLETE", photo: url });
+      dispatch({
+        type: "BACK_CAPTURE_COMPLETE",
+        photo: finalUrl,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      });
     } catch {
       toast.error("Fehler beim Aufnehmen der Rückseite");
       dispatch({ type: "CAPTURE_FAILED" });
     }
-  }, [dispatch]);
+  }, [dispatch, state.flipMode]);
 
   const handleCropChange = useCallback(
     (crop: CropRect) => {
@@ -113,6 +148,52 @@ export default function CapturePage() {
     },
     [dispatch]
   );
+
+  const [rotating, setRotating] = useState(false);
+
+  const handleRotateFront = useCallback(async () => {
+    if (!state.frontPhoto || rotating) return;
+    setRotating(true);
+    try {
+      const result = await rotateImage90(
+        state.frontPhoto,
+        state.imageWidth,
+        state.imageHeight
+      );
+      dispatch({
+        type: "ROTATE_FRONT",
+        photo: result.url,
+        width: result.width,
+        height: result.height,
+      });
+    } catch {
+      toast.error("Rotation fehlgeschlagen");
+    } finally {
+      setRotating(false);
+    }
+  }, [state.frontPhoto, state.imageWidth, state.imageHeight, rotating, dispatch]);
+
+  const handleRotateBack = useCallback(async () => {
+    if (!state.backPhoto || rotating) return;
+    setRotating(true);
+    try {
+      const result = await rotateImage90(
+        state.backPhoto,
+        state.backImageWidth,
+        state.backImageHeight
+      );
+      dispatch({
+        type: "ROTATE_BACK",
+        photo: result.url,
+        width: result.width,
+        height: result.height,
+      });
+    } catch {
+      toast.error("Rotation fehlgeschlagen");
+    } finally {
+      setRotating(false);
+    }
+  }, [state.backPhoto, state.backImageWidth, state.backImageHeight, rotating, dispatch]);
 
   const handleSaveCoin = useCallback(
     async (formData: CoinFormData) => {
@@ -172,6 +253,189 @@ export default function CapturePage() {
     [state, dispatch]
   );
 
+  // Crop preview URLs for coin_entry step
+  const [frontPreviewUrl, setFrontPreviewUrl] = useState<string | null>(null);
+  const [backPreviewUrl, setBackPreviewUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (state.step !== "coin_entry") {
+      setFrontPreviewUrl(null);
+      setBackPreviewUrl(null);
+      return;
+    }
+    const currentCoin = state.coins[state.currentCoinIndex];
+    if (!currentCoin) return;
+
+    let cancelled = false;
+    const urls: string[] = [];
+
+    if (state.frontPhoto && currentCoin.frontCrop) {
+      generateCropPreviewUrl(state.frontPhoto, currentCoin.frontCrop).then((url) => {
+        if (!cancelled) {
+          urls.push(url);
+          setFrontPreviewUrl(url);
+        } else {
+          URL.revokeObjectURL(url);
+        }
+      });
+    }
+
+    if (state.backPhoto && currentCoin.backCrop) {
+      generateCropPreviewUrl(state.backPhoto, currentCoin.backCrop).then((url) => {
+        if (!cancelled) {
+          urls.push(url);
+          setBackPreviewUrl(url);
+        } else {
+          URL.revokeObjectURL(url);
+        }
+      });
+    } else {
+      setBackPreviewUrl(null);
+    }
+
+    return () => {
+      cancelled = true;
+      urls.forEach((u) => URL.revokeObjectURL(u));
+    };
+  }, [state.step, state.currentCoinIndex, state.frontPhoto, state.backPhoto, state.coins]);
+
+  // Auto-detection
+  const [detecting, setDetecting] = useState(false);
+
+  const runDetection = useCallback(async (): Promise<{
+    coins: { x: number; y: number; width: number; height: number; centerX: number; centerY: number }[];
+    suggestedGrid?: { rows: number; cols: number; overlay: { x: number; y: number; width: number; height: number } };
+  } | null> => {
+    if (!state.frontPhoto) return null;
+    const response = await fetch(state.frontPhoto);
+    const blob = await response.blob();
+    const arrayBuffer = await blob.arrayBuffer();
+    const detectResponse = await fetch("/api/images/detect", {
+      method: "POST",
+      body: arrayBuffer,
+      headers: { "Content-Type": "application/octet-stream" },
+    });
+    if (!detectResponse.ok) throw new Error("Detection failed");
+    return detectResponse.json();
+  }, [state.frontPhoto]);
+
+  const handleAutoDetect = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const result = await runDetection();
+      if (!result || result.coins.length === 0) {
+        toast.info("Keine Münzen erkannt. Bitte manuell positionieren.");
+        return;
+      }
+
+      if (result.coins.length === 1) {
+        const coin = result.coins[0];
+        const size = Math.max(coin.width, coin.height) * 1.1;
+        dispatch({ type: "SELECT_MODE", mode: "single" });
+        dispatch({
+          type: "SET_SINGLE_CROP",
+          crop: {
+            x: Math.max(0, coin.centerX - size / 2),
+            y: Math.max(0, coin.centerY - size / 2),
+            width: size,
+            height: size,
+          },
+        });
+        toast.success("Münze erkannt!");
+      } else if (result.suggestedGrid) {
+        dispatch({ type: "SELECT_MODE", mode: "grid" });
+        dispatch({
+          type: "SET_GRID_CONFIG",
+          config: {
+            rows: result.suggestedGrid.rows,
+            cols: result.suggestedGrid.cols,
+            emptySlots: [],
+          },
+        });
+        dispatch({
+          type: "SET_GRID_OVERLAY",
+          overlay: result.suggestedGrid.overlay,
+        });
+        toast.success(
+          `${result.coins.length} Münzen erkannt (${result.suggestedGrid.rows}×${result.suggestedGrid.cols} Grid)`
+        );
+      } else {
+        toast.info(
+          `${result.coins.length} Münzen erkannt, aber kein klares Grid. Bitte manuell konfigurieren.`
+        );
+        dispatch({ type: "SELECT_MODE", mode: "grid" });
+      }
+    } catch {
+      toast.error("Auto-Erkennung fehlgeschlagen");
+    } finally {
+      setDetecting(false);
+    }
+  }, [runDetection, dispatch]);
+
+  const handleAutoDetectSingle = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const result = await runDetection();
+      if (!result || result.coins.length === 0) {
+        toast.info("Keine Münze erkannt.");
+        return;
+      }
+      // Pick the largest detected coin
+      const coin = result.coins.reduce((a, b) =>
+        b.width * b.height > a.width * a.height ? b : a
+      );
+      const size = Math.max(coin.width, coin.height) * 1.1;
+      dispatch({
+        type: "SET_SINGLE_CROP",
+        crop: {
+          x: Math.max(0, coin.centerX - size / 2),
+          y: Math.max(0, coin.centerY - size / 2),
+          width: size,
+          height: size,
+        },
+      });
+      toast.success("Münze erkannt!");
+    } catch {
+      toast.error("Auto-Erkennung fehlgeschlagen");
+    } finally {
+      setDetecting(false);
+    }
+  }, [runDetection, dispatch]);
+
+  const handleAutoDetectGrid = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const result = await runDetection();
+      if (!result || result.coins.length === 0) {
+        toast.info("Keine Münzen erkannt.");
+        return;
+      }
+      if (result.suggestedGrid) {
+        dispatch({
+          type: "SET_GRID_CONFIG",
+          config: {
+            rows: result.suggestedGrid.rows,
+            cols: result.suggestedGrid.cols,
+            emptySlots: [],
+          },
+        });
+        dispatch({
+          type: "SET_GRID_OVERLAY",
+          overlay: result.suggestedGrid.overlay,
+        });
+        toast.success(
+          `${result.coins.length} Münzen erkannt (${result.suggestedGrid.rows}×${result.suggestedGrid.cols})`
+        );
+      } else {
+        toast.info("Kein klares Grid erkannt. Bitte manuell konfigurieren.");
+      }
+    } catch {
+      toast.error("Auto-Erkennung fehlgeschlagen");
+    } finally {
+      setDetecting(false);
+    }
+  }, [runDetection, dispatch]);
+
   const gridCoinCount =
     state.gridConfig
       ? state.gridConfig.rows * state.gridConfig.cols -
@@ -218,9 +482,17 @@ export default function CapturePage() {
       {/* Step: Select mode */}
       {state.step === "select_mode" && (
         <div className="space-y-6">
-          <div className="flex gap-4">
+          <div className="flex flex-wrap gap-4">
             <Button
               size="lg"
+              onClick={handleAutoDetect}
+              disabled={detecting}
+            >
+              {detecting ? "Erkennung..." : "Auto-Erkennung"}
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
               onClick={() =>
                 dispatch({ type: "SELECT_MODE", mode: "single" })
               }
@@ -255,6 +527,22 @@ export default function CapturePage() {
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">Ausschnitt wählen</h2>
               <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleAutoDetectSingle}
+                  disabled={detecting}
+                >
+                  {detecting ? "..." : "Auto"}
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateFront}
+                  disabled={rotating}
+                >
+                  Drehen 90°
+                </Button>
                 <Button
                   variant="outline"
                   onClick={() => dispatch({ type: "RESET" })}
@@ -344,6 +632,14 @@ export default function CapturePage() {
               </h2>
               <div className="flex gap-2">
                 <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateBack}
+                  disabled={rotating}
+                >
+                  Drehen 90°
+                </Button>
+                <Button
                   variant="outline"
                   onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
                 >
@@ -377,7 +673,17 @@ export default function CapturePage() {
         state.gridConfig &&
         state.gridOverlay && (
           <div className="space-y-4">
-            <h2 className="text-lg font-semibold">Grid platzieren</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Grid platzieren</h2>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRotateFront}
+                disabled={rotating}
+              >
+                Drehen 90°
+              </Button>
+            </div>
             <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
               <GridCanvas
                 imageSrc={state.frontPhoto}
@@ -394,11 +700,17 @@ export default function CapturePage() {
               />
               <GridConfigPanel
                 config={state.gridConfig}
+                flipMode={state.flipMode}
                 onConfigChange={(config) =>
                   dispatch({ type: "SET_GRID_CONFIG", config })
                 }
+                onFlipModeChange={(flipMode) =>
+                  dispatch({ type: "SET_FLIP_MODE", flipMode })
+                }
                 onConfirm={() => dispatch({ type: "CONFIRM_GRID_FRONT" })}
                 onCancel={() => dispatch({ type: "RESET" })}
+                onAutoDetect={handleAutoDetectGrid}
+                autoDetecting={detecting}
                 coinCount={gridCoinCount}
               />
             </div>
@@ -416,9 +728,9 @@ export default function CapturePage() {
             Rückseite aufnehmen
           </h2>
           <p className="text-muted-foreground">
-            Drehe die Münzseite wie ein Buch um und nehme ein Foto der
-            Rückseiten auf. Das Bild wird automatisch gespiegelt, damit die
-            Positionen übereinstimmen.
+            {state.flipMode === "book"
+              ? "Drehe die Münzseite wie ein Buch um und nehme ein Foto der Rückseiten auf. Das Bild wird automatisch gespiegelt."
+              : "Drehe alle Münzen einzeln um und nehme ein Foto der Rückseiten auf."}
           </p>
           <div className="flex gap-4">
             <Button size="lg" onClick={handleCaptureBack}>
@@ -462,53 +774,66 @@ export default function CapturePage() {
         </div>
       )}
 
-      {/* Step: Grid back crop (confirm back side matches) */}
-      {state.step === "grid_back_crop" && state.backPhoto && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold">
-            Rückseite überprüfen
-          </h2>
-          <p className="text-muted-foreground">
-            Das Bild wurde gespiegelt. Überprüfe, ob die Positionen zur
-            Vorderseite passen.
-          </p>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div>
-              <p className="mb-2 text-sm font-medium">Vorderseite</p>
-              {state.frontPhoto && (
-                <img
-                  src={state.frontPhoto}
-                  alt="Vorderseite"
-                  className="max-h-80 rounded-lg border"
-                />
-              )}
+      {/* Step: Grid back alignment */}
+      {state.step === "grid_back_align" &&
+        state.backPhoto &&
+        state.gridConfig &&
+        state.backGridOverlay && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                Rückseite: Grid ausrichten
+              </h2>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={handleRotateBack}
+                disabled={rotating}
+              >
+                Drehen 90°
+              </Button>
             </div>
-            <div>
-              <p className="mb-2 text-sm font-medium">
-                Rückseite (gespiegelt)
-              </p>
-              <img
-                src={state.backPhoto}
-                alt="Rückseite"
-                className="max-h-80 rounded-lg border"
+            <p className="text-muted-foreground">
+              Positioniere das Grid auf der Rückseite. Zeilen, Spalten und leere
+              Felder bleiben gleich.
+            </p>
+            <div className="grid gap-6 lg:grid-cols-[1fr_250px]">
+              <GridCanvas
+                imageSrc={state.backPhoto}
+                imageWidth={state.backImageWidth}
+                imageHeight={state.backImageHeight}
+                gridConfig={state.gridConfig}
+                overlay={state.backGridOverlay}
+                onOverlayChange={(overlay) =>
+                  dispatch({ type: "SET_BACK_GRID_OVERLAY", overlay })
+                }
+                onToggleEmptySlot={() => {}}
+                readOnly
               />
+              <div className="space-y-4 rounded-lg border bg-card p-4">
+                <p className="text-sm text-muted-foreground">
+                  Verschiebe und skaliere das Grid, damit es zur Rückseite
+                  passt.
+                </p>
+                <div className="flex flex-col gap-2">
+                  <Button
+                    onClick={() =>
+                      dispatch({ type: "CONFIRM_BACK_GRID_ALIGN" })
+                    }
+                  >
+                    Bestätigen & Münzen bearbeiten
+                  </Button>
+                  <Button
+                    variant="outline"
+                    onClick={() => dispatch({ type: "RETAKE_BACK" })}
+                  >
+                    Nochmal aufnehmen
+                  </Button>
+                </div>
+              </div>
             </div>
           </div>
-          <div className="flex gap-3">
-            <Button onClick={() => dispatch({ type: "CONFIRM_GRID_BACK" })}>
-              Bestätigen & Münzen bearbeiten
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() =>
-                dispatch({ type: "RETAKE_BACK" })
-              }
-            >
-              Nochmal aufnehmen
-            </Button>
-          </div>
-        </div>
-      )}
+        )}
 
       {/* Step: Coin entry */}
       {state.step === "coin_entry" && (
@@ -528,6 +853,8 @@ export default function CapturePage() {
               <CoinForm
                 key={state.currentCoinIndex}
                 defaults={state.sessionDefaults}
+                frontImageUrl={frontPreviewUrl ?? undefined}
+                backImageUrl={backPreviewUrl ?? undefined}
                 onSave={handleSaveCoin}
                 onSkip={
                   state.coins.length > 1
@@ -541,28 +868,6 @@ export default function CapturePage() {
             </CardContent>
           </Card>
           <div className="space-y-4">
-            {state.frontPhoto && (
-              <div>
-                <p className="mb-2 text-sm font-medium">Vorderseite</p>
-                <img
-                  src={state.frontPhoto}
-                  alt="Vorderseite"
-                  className="rounded-lg border"
-                  style={{ maxHeight: 300 }}
-                />
-              </div>
-            )}
-            {state.backPhoto && (
-              <div>
-                <p className="mb-2 text-sm font-medium">Rückseite</p>
-                <img
-                  src={state.backPhoto}
-                  alt="Rückseite"
-                  className="rounded-lg border"
-                  style={{ maxHeight: 300 }}
-                />
-              </div>
-            )}
             {state.coins.length > 1 && state.coins[state.currentCoinIndex] && (
               <div className="text-sm text-muted-foreground">
                 Position: Zeile{" "}

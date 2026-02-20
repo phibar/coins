@@ -1,5 +1,7 @@
 export type CaptureMode = "single" | "grid";
 
+export type FlipMode = "book" | "turn";
+
 export type CaptureStep =
   | "idle"
   | "capturing"
@@ -11,7 +13,7 @@ export type CaptureStep =
   | "grid_config"
   | "grid_front_confirmed"
   | "grid_back_capture"
-  | "grid_back_crop"
+  | "grid_back_align"
   | "coin_entry"
   | "saving"
   | "saved";
@@ -184,7 +186,7 @@ export const EMPTY_COIN_FORM: CoinFormData = {
 export interface CaptureState {
   step: CaptureStep;
   mode: CaptureMode | null;
-  frontPhoto: string | null; // base64 data URL
+  frontPhoto: string | null;
   backPhoto: string | null;
   imageWidth: number;
   imageHeight: number;
@@ -194,6 +196,8 @@ export interface CaptureState {
   backImageWidth: number;
   backImageHeight: number;
   singleBackCrop: CropRect | null;
+  flipMode: FlipMode;
+  backGridOverlay: GridOverlayState | null;
   coins: CapturedCoin[];
   currentCoinIndex: number;
   sessionDefaults: Partial<CoinFormData>;
@@ -214,9 +218,13 @@ export type CaptureAction =
   | { type: "SET_GRID_OVERLAY"; overlay: GridOverlayState }
   | { type: "TOGGLE_GRID_EMPTY_SLOT"; slotIndex: number }
   | { type: "CONFIRM_GRID_FRONT" }
+  | { type: "SET_FLIP_MODE"; flipMode: FlipMode }
   | { type: "START_BACK_CAPTURE" }
-  | { type: "BACK_CAPTURE_COMPLETE"; photo: string }
-  | { type: "CONFIRM_GRID_BACK" }
+  | { type: "BACK_CAPTURE_COMPLETE"; photo: string; width: number; height: number }
+  | { type: "SET_BACK_GRID_OVERLAY"; overlay: GridOverlayState }
+  | { type: "CONFIRM_BACK_GRID_ALIGN" }
+  | { type: "ROTATE_FRONT"; photo: string; width: number; height: number }
+  | { type: "ROTATE_BACK"; photo: string; width: number; height: number }
   | { type: "SKIP_BACK_CAPTURE" }
   | { type: "RETAKE_BACK" }
   | { type: "NEXT_COIN" }

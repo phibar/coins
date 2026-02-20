@@ -16,6 +16,7 @@ import {
 import type { CoinFormData } from "@/types/capture";
 import { EMPTY_COIN_FORM } from "@/types/capture";
 import { NumistaSearchDialog } from "./numista-search-dialog";
+import { NumistaImageSearchDialog } from "./numista-image-search-dialog";
 
 const CONDITION_OPTIONS = [
   { value: "s", label: "s - schön" },
@@ -89,7 +90,7 @@ export function CoinForm({
                 src={frontImageUrl}
                 alt="Vorderseite"
                 className="w-full rounded-lg border object-cover"
-                style={{ maxHeight: 200 }}
+                style={{ maxHeight: 300 }}
               />
             </div>
           )}
@@ -102,7 +103,7 @@ export function CoinForm({
                 src={backImageUrl}
                 alt="Rückseite"
                 className="w-full rounded-lg border object-cover"
-                style={{ maxHeight: 200 }}
+                style={{ maxHeight: 300 }}
               />
             </div>
           )}
@@ -153,6 +154,17 @@ export function CoinForm({
             Numista-Suche
           </Button>
         </NumistaSearchDialog>
+        {frontImageUrl && (
+          <NumistaImageSearchDialog
+            frontImageUrl={frontImageUrl}
+            backImageUrl={backImageUrl}
+            onSelect={handleNumistaSelect}
+          >
+            <Button type="button" variant="outline" size="sm">
+              Bilderkennung
+            </Button>
+          </NumistaImageSearchDialog>
+        )}
         {numistaTitle && (
           <span className="text-sm text-muted-foreground truncate">
             {numistaTitle}

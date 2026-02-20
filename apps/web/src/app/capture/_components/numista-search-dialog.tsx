@@ -292,11 +292,8 @@ export function NumistaSearchDialog({
         </DialogHeader>
 
         {/* Search form */}
-        <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 items-end">
+        <div className="space-y-2">
           <div>
-            <Label htmlFor="numista-q" className="text-xs">
-              Suche
-            </Label>
             <Input
               id="numista-q"
               value={query}
@@ -309,62 +306,66 @@ export function NumistaSearchDialog({
                   performSearch(query, issuer, year);
                 }
               }}
-              placeholder="z.B. 5 Mark, 10 Euro"
+              placeholder="z.B. 5 Mark, 10 Euro, 1 Pfennig..."
+              autoFocus
             />
           </div>
-          <div>
-            <Label className="text-xs">Land</Label>
-            <Select
-              value={issuer}
-              onValueChange={(val) => {
-                const v = val === "__all__" ? "" : val;
-                setIssuer(v);
-                handleSearchChange(query, v, year);
-              }}
+          <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
+            <div>
+              <Label className="text-xs">Land</Label>
+              <Select
+                value={issuer}
+                onValueChange={(val) => {
+                  const v = val === "__all__" ? "" : val;
+                  setIssuer(v);
+                  handleSearchChange(query, v, year);
+                }}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Alle Länder" />
+                </SelectTrigger>
+                <SelectContent>
+                  {ISSUER_OPTIONS.map((opt) => (
+                    <SelectItem
+                      key={opt.value || "__all__"}
+                      value={opt.value || "__all__"}
+                    >
+                      {opt.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label htmlFor="numista-year" className="text-xs">
+                Jahr
+              </Label>
+              <Input
+                id="numista-year"
+                value={year}
+                onChange={(e) => {
+                  setYear(e.target.value);
+                  handleSearchChange(query, issuer, e.target.value);
+                }}
+                placeholder="1970"
+                className="w-24"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    performSearch(query, issuer, year);
+                  }
+                }}
+              />
+            </div>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => performSearch(query, issuer, year)}
+              disabled={loading || query.length < 2}
             >
-              <SelectTrigger>
-                <SelectValue placeholder="Alle Länder" />
-              </SelectTrigger>
-              <SelectContent>
-                {ISSUER_OPTIONS.map((opt) => (
-                  <SelectItem
-                    key={opt.value || "__all__"}
-                    value={opt.value || "__all__"}
-                  >
-                    {opt.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              Suchen
+            </Button>
           </div>
-          <div>
-            <Label htmlFor="numista-year" className="text-xs">
-              Jahr
-            </Label>
-            <Input
-              id="numista-year"
-              value={year}
-              onChange={(e) => {
-                setYear(e.target.value);
-                handleSearchChange(query, issuer, e.target.value);
-              }}
-              placeholder="z.B. 1970"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  performSearch(query, issuer, year);
-                }
-              }}
-            />
-          </div>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => performSearch(query, issuer, year)}
-            disabled={loading || query.length < 2}
-          >
-            Suchen
-          </Button>
         </div>
 
         {/* Results */}

@@ -10,6 +10,7 @@ import type {
   GridOverlayState,
   CapturedCoin,
   CoinFormData,
+  FlipMode,
 } from "@/types/capture";
 
 const initialState: CaptureState = {
@@ -25,6 +26,8 @@ const initialState: CaptureState = {
   gridOverlay: null,
   singleCrop: null,
   singleBackCrop: null,
+  flipMode: "book" as FlipMode,
+  backGridOverlay: null,
   coins: [],
   currentCoinIndex: 0,
   sessionDefaults: {},
@@ -193,21 +196,44 @@ function captureReducer(
       };
     }
 
+    case "SET_FLIP_MODE":
+      return { ...state, flipMode: action.flipMode };
+
     case "START_BACK_CAPTURE":
       return { ...state, step: "capturing" };
 
     case "BACK_CAPTURE_COMPLETE":
       return {
         ...state,
-        step: "grid_back_crop",
+        step: "grid_back_align",
         backPhoto: action.photo,
+        backImageWidth: action.width,
+        backImageHeight: action.height,
+        // Initialize back grid overlay from front grid as starting point
+        backGridOverlay: state.gridOverlay ? { ...state.gridOverlay } : null,
       };
 
-    case "CONFIRM_GRID_BACK": {
-      // After flop(), grid positions match 1:1
+    case "SET_BACK_GRID_OVERLAY":
+      return { ...state, backGridOverlay: action.overlay };
+
+    case "CONFIRM_BACK_GRID_ALIGN": {
+      // Extract back crops from the re-aligned back grid overlay
+      const backOverlay = state.backGridOverlay!;
+      const gridCfg = state.gridConfig!;
+      const cellW = backOverlay.width / gridCfg.cols;
+      const cellH = backOverlay.height / gridCfg.rows;
+
       const coinsWithBack = state.coins.map((coin) => ({
         ...coin,
-        backCrop: coin.frontCrop,
+        backCrop:
+          coin.gridRow !== undefined && coin.gridCol !== undefined
+            ? {
+                x: backOverlay.x + coin.gridCol * cellW,
+                y: backOverlay.y + coin.gridRow * cellH,
+                width: cellW,
+                height: cellH,
+              }
+            : coin.frontCrop,
       }));
       return {
         ...state,
@@ -216,6 +242,56 @@ function captureReducer(
         currentCoinIndex: 0,
       };
     }
+
+    case "ROTATE_FRONT":
+      return {
+        ...state,
+        frontPhoto: action.photo,
+        imageWidth: action.width,
+        imageHeight: action.height,
+        // Reset crop to center of rotated image
+        singleCrop: state.singleCrop
+          ? {
+              x: action.width * 0.25,
+              y: action.height * 0.25,
+              width: Math.min(action.width, action.height) * 0.5,
+              height: Math.min(action.width, action.height) * 0.5,
+            }
+          : null,
+        // Reset grid overlay for rotated image
+        gridOverlay: state.gridOverlay
+          ? {
+              x: action.width * 0.1,
+              y: action.height * 0.1,
+              width: action.width * 0.8,
+              height: action.height * 0.8,
+            }
+          : null,
+      };
+
+    case "ROTATE_BACK":
+      return {
+        ...state,
+        backPhoto: action.photo,
+        backImageWidth: action.width,
+        backImageHeight: action.height,
+        singleBackCrop: state.singleBackCrop
+          ? {
+              x: action.width * 0.25,
+              y: action.height * 0.25,
+              width: Math.min(action.width, action.height) * 0.5,
+              height: Math.min(action.width, action.height) * 0.5,
+            }
+          : null,
+        backGridOverlay: state.backGridOverlay
+          ? {
+              x: action.width * 0.1,
+              y: action.height * 0.1,
+              width: action.width * 0.8,
+              height: action.height * 0.8,
+            }
+          : null,
+      };
 
     case "SKIP_BACK_CAPTURE":
       return {
@@ -229,6 +305,7 @@ function captureReducer(
         ...state,
         step: "grid_back_capture",
         backPhoto: null,
+        backGridOverlay: null,
       };
 
     case "NEXT_COIN":

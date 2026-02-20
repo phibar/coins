@@ -11,6 +11,7 @@ interface GridCanvasProps {
   overlay: GridOverlayState;
   onOverlayChange: (overlay: GridOverlayState) => void;
   onToggleEmptySlot: (slotIndex: number) => void;
+  readOnly?: boolean;
   maxDisplayHeight?: number;
 }
 
@@ -24,6 +25,7 @@ export function GridCanvas({
   overlay,
   onOverlayChange,
   onToggleEmptySlot,
+  readOnly,
   maxDisplayHeight = 600,
 }: GridCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -258,7 +260,7 @@ export function GridCanvas({
 
   const handleClick = useCallback(
     (e: React.MouseEvent) => {
-      if (dragMode) return;
+      if (dragMode || readOnly) return;
 
       const pos = getCanvasPos(e);
       const ox = overlay.x * scaleFactor;

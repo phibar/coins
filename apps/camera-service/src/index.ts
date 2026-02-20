@@ -1,6 +1,6 @@
 import express from "express";
 import cors from "cors";
-import { captureImage, checkCamera, ensureJpegMode } from "./capture.js";
+import { captureImage, checkCamera, ensureMaxQuality } from "./capture.js";
 
 const app = express();
 const PORT = process.env.CAMERA_PORT || 3001;
@@ -34,5 +34,5 @@ app.post("/capture", async (_req, res) => {
 
 app.listen(PORT, async () => {
   console.log(`Camera service running on http://localhost:${PORT}`);
-  await ensureJpegMode();
+  await ensureMaxQuality();
 });
