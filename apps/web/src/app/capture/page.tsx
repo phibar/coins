@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCaptureSession } from "@/hooks/use-capture-session";
@@ -23,14 +24,41 @@ function Kbd({ children }: { children: React.ReactNode }) {
   );
 }
 
+/** Apply saved camera rotation to a captured image */
+async function applyCameraRotation(
+  url: string,
+  width: number,
+  height: number
+): Promise<{ url: string; width: number; height: number }> {
+  const savedRotation = parseInt(localStorage.getItem("camera-rotation") || "0");
+  if (savedRotation <= 0) return { url, width, height };
+  let finalUrl = url;
+  let finalWidth = width;
+  let finalHeight = height;
+  const rotations = savedRotation / 90;
+  for (let i = 0; i < rotations; i++) {
+    const result = await rotateImage90(finalUrl, finalWidth, finalHeight);
+    if (finalUrl !== url) URL.revokeObjectURL(finalUrl);
+    finalUrl = result.url;
+    finalWidth = result.width;
+    finalHeight = result.height;
+  }
+  URL.revokeObjectURL(url);
+  return { url: finalUrl, width: finalWidth, height: finalHeight };
+}
+
 export default function CapturePage() {
   const { state, dispatch, capturePhoto, captureBackPhoto, loadTestImage } = useCaptureSession();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
+  const router = useRouter();
 
   // Camera status polling
   const [cameraConnected, setCameraConnected] = useState(false);
   const [collections, setCollections] = useState<CollectionWithImages[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [savedCoinIndices, setSavedCoinIndices] = useState<Set<number>>(new Set());
+  const [skippedCoinIndices, setSkippedCoinIndices] = useState<Set<number>>(new Set());
 
   useEffect(() => {
     const check = async () => {
@@ -53,6 +81,15 @@ export default function CapturePage() {
       .then((data) => setCollections(data))
       .catch(() => {});
   }, []);
+
+  // Auto-capture on page load when camera connected
+  const autoCaptured = useRef(false);
+  useEffect(() => {
+    if (cameraConnected && state.step === "idle" && !autoCaptured.current) {
+      autoCaptured.current = true;
+      capturePhoto();
+    }
+  }, [cameraConnected, state.step, capturePhoto]);
 
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -82,49 +119,22 @@ export default function CapturePage() {
         return;
       }
 
-      // Grid/Multi mode: optionally flip, then load dimensions
-      const reader = new FileReader();
-      reader.onload = async () => {
-        try {
-          const arrayBuffer = reader.result as ArrayBuffer;
-          let finalUrl: string;
-
-          if (state.flipMode === "book") {
-            const response = await fetch("/api/images/flip", {
-              method: "POST",
-              body: arrayBuffer,
-              headers: { "Content-Type": "application/octet-stream" },
-            });
-            if (!response.ok) throw new Error("Flip failed");
-            const flippedBlob = await response.blob();
-            finalUrl = URL.createObjectURL(flippedBlob);
-            toast.success("Rückseite geladen und gespiegelt");
-          } else {
-            const blob = new Blob([arrayBuffer], { type: file.type });
-            finalUrl = URL.createObjectURL(blob);
-            toast.success("Rückseite geladen");
-          }
-
-          const img = new window.Image();
-          await new Promise<void>((resolve, reject) => {
-            img.onload = () => resolve();
-            img.onerror = () => reject(new Error("Image load failed"));
-            img.src = finalUrl;
-          });
-
-          dispatch({
-            type: state.mode === "multi" ? "MULTI_BACK_COMPLETE" : "BACK_CAPTURE_COMPLETE",
-            photo: finalUrl,
-            width: img.naturalWidth,
-            height: img.naturalHeight,
-          });
-        } catch {
-          toast.error("Fehler beim Laden der Rückseite");
-        }
+      // Grid/Multi mode
+      const url = URL.createObjectURL(file);
+      const img = new window.Image();
+      img.onload = () => {
+        toast.success("Rückseite geladen");
+        dispatch({
+          type: state.mode === "multi" ? "MULTI_BACK_COMPLETE" : "BACK_CAPTURE_COMPLETE",
+          photo: url,
+          width: img.naturalWidth,
+          height: img.naturalHeight,
+        });
       };
-      reader.readAsArrayBuffer(file);
+      img.onerror = () => toast.error("Fehler beim Laden der Rückseite");
+      img.src = url;
     },
-    [dispatch, state.mode, state.flipMode]
+    [dispatch, state.mode]
   );
 
   const handleCaptureBack = useCallback(async () => {
@@ -134,43 +144,28 @@ export default function CapturePage() {
       if (!response.ok) throw new Error("Capture failed");
 
       const blob = await response.blob();
-      let finalUrl: string;
+      const url = URL.createObjectURL(blob);
 
-      if (state.flipMode === "book") {
-        // Flip the back image horizontally (book-flip)
-        const arrayBuffer = await blob.arrayBuffer();
-        const flipResponse = await fetch("/api/images/flip", {
-          method: "POST",
-          body: arrayBuffer,
-          headers: { "Content-Type": "application/octet-stream" },
-        });
-        if (!flipResponse.ok) throw new Error("Flip failed");
-        const flippedBlob = await flipResponse.blob();
-        finalUrl = URL.createObjectURL(flippedBlob);
-      } else {
-        // "turn" mode: no flipping
-        finalUrl = URL.createObjectURL(blob);
-      }
-
-      // Load dimensions
       const img = new window.Image();
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
         img.onerror = () => reject(new Error("Image load failed"));
-        img.src = finalUrl;
+        img.src = url;
       });
+
+      const rotated = await applyCameraRotation(url, img.naturalWidth, img.naturalHeight);
 
       dispatch({
         type: state.mode === "multi" ? "MULTI_BACK_COMPLETE" : "BACK_CAPTURE_COMPLETE",
-        photo: finalUrl,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+        photo: rotated.url,
+        width: rotated.width,
+        height: rotated.height,
       });
     } catch {
       toast.error("Fehler beim Aufnehmen der Rückseite");
       dispatch({ type: "CAPTURE_FAILED" });
     }
-  }, [dispatch, state.flipMode, state.mode]);
+  }, [dispatch, state.mode]);
 
   const captureNumisbriefBack = useCallback(async () => {
     dispatch({ type: "START_BACK_CAPTURE" });
@@ -185,17 +180,77 @@ export default function CapturePage() {
         img.onerror = () => reject(new Error("Image load failed"));
         img.src = url;
       });
+      const rotated = await applyCameraRotation(url, img.naturalWidth, img.naturalHeight);
       dispatch({
         type: "NUMISBRIEF_BACK_COMPLETE",
-        photo: url,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+        photo: rotated.url,
+        width: rotated.width,
+        height: rotated.height,
       });
     } catch {
       toast.error("Fehler beim Aufnehmen der Rückseite");
       dispatch({ type: "CAPTURE_FAILED" });
     }
   }, [dispatch]);
+
+  // Retake front: capture new photo and replace in-place
+  const [retaking, setRetaking] = useState(false);
+
+  const retakeFront = useCallback(async () => {
+    if (retaking) return;
+    setRetaking(true);
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Capture failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const img = new window.Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load failed"));
+        img.src = url;
+      });
+      const rotated = await applyCameraRotation(url, img.naturalWidth, img.naturalHeight);
+      dispatch({
+        type: "RETAKE_FRONT",
+        photo: rotated.url,
+        width: rotated.width,
+        height: rotated.height,
+      });
+    } catch {
+      toast.error("Aufnahme fehlgeschlagen");
+    } finally {
+      setRetaking(false);
+    }
+  }, [retaking, dispatch]);
+
+  const retakeBack = useCallback(async () => {
+    if (retaking) return;
+    setRetaking(true);
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Capture failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const img = new window.Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load failed"));
+        img.src = url;
+      });
+      const rotated = await applyCameraRotation(url, img.naturalWidth, img.naturalHeight);
+      dispatch({
+        type: "RETAKE_BACK_PHOTO",
+        photo: rotated.url,
+        width: rotated.width,
+        height: rotated.height,
+      });
+    } catch {
+      toast.error("Aufnahme fehlgeschlagen");
+    } finally {
+      setRetaking(false);
+    }
+  }, [retaking, dispatch]);
 
   const handleCropChange = useCallback(
     (crop: CropRect) => {
@@ -271,9 +326,11 @@ export default function CapturePage() {
     }
   }, [state.backPhoto, state.backImageWidth, state.backImageHeight, rotating, dispatch]);
 
-  const handleSaveCoin = useCallback(
-    async (formData: CoinFormData) => {
+  // Save coin handler with three modes
+  const doSaveCoin = useCallback(
+    async (formData: CoinFormData): Promise<boolean> => {
       dispatch({ type: "SAVE_COIN" });
+      setSaving(true);
 
       try {
         const currentCoin = state.coins[state.currentCoinIndex];
@@ -322,12 +379,67 @@ export default function CapturePage() {
         toast.success("Münze gespeichert!");
         dispatch({ type: "SET_SESSION_DEFAULTS", defaults: formData });
         dispatch({ type: "COIN_SAVED" });
+        return true;
       } catch {
         toast.error("Fehler beim Speichern");
         dispatch({ type: "CAPTURE_FAILED" });
+        return false;
+      } finally {
+        setSaving(false);
       }
     },
     [state, dispatch]
+  );
+
+  const handleSaveAndContinue = useCallback(
+    async (formData: CoinFormData) => {
+      const ok = await doSaveCoin(formData);
+      if (!ok) return;
+      setSavedCoinIndices((prev) => new Set(prev).add(state.currentCoinIndex));
+      setSkippedCoinIndices((prev) => { const n = new Set(prev); n.delete(state.currentCoinIndex); return n; });
+      const isLastCoin = state.currentCoinIndex >= state.coins.length - 1;
+      if (isLastCoin) {
+        dispatch({ type: "CONTINUE_WITH_SESSION" });
+        autoCaptured.current = false;
+        if (cameraConnected) {
+          setTimeout(() => capturePhoto(), 100);
+        }
+      } else {
+        dispatch({ type: "COIN_SAVED" });
+      }
+    },
+    [doSaveCoin, dispatch, state.currentCoinIndex, state.coins.length, cameraConnected, capturePhoto]
+  );
+
+  const handleSaveAndNew = useCallback(
+    async (formData: CoinFormData) => {
+      const ok = await doSaveCoin(formData);
+      if (!ok) return;
+      setSavedCoinIndices((prev) => new Set(prev).add(state.currentCoinIndex));
+      setSkippedCoinIndices((prev) => { const n = new Set(prev); n.delete(state.currentCoinIndex); return n; });
+      dispatch({ type: "START_FRESH" });
+      autoCaptured.current = false;
+      if (cameraConnected) {
+        setTimeout(() => capturePhoto(), 100);
+      }
+    },
+    [doSaveCoin, dispatch, state.currentCoinIndex, cameraConnected, capturePhoto]
+  );
+
+  const handleSaveAndExit = useCallback(
+    async (formData: CoinFormData) => {
+      const ok = await doSaveCoin(formData);
+      if (!ok) return;
+      setSavedCoinIndices((prev) => new Set(prev).add(state.currentCoinIndex));
+      setSkippedCoinIndices((prev) => { const n = new Set(prev); n.delete(state.currentCoinIndex); return n; });
+      router.push("/collection");
+    },
+    [doSaveCoin, router, state.currentCoinIndex]
+  );
+
+  // Check if all coins are handled (saved or skipped) after saving the current one
+  const allHandledAfterSave = state.coins.length <= 1 || state.coins.every((_, idx) =>
+    idx === state.currentCoinIndex || savedCoinIndices.has(idx) || skippedCoinIndices.has(idx)
   );
 
   // Crop preview URLs for coin_entry step
@@ -376,189 +488,35 @@ export default function CapturePage() {
     };
   }, [state.step, state.currentCoinIndex, state.frontPhoto, state.backPhoto, state.coins]);
 
-  // Auto-detection
-  const [detecting, setDetecting] = useState(false);
+  // Coin list thumbnails for multi-coin navigation
+  const [coinThumbnails, setCoinThumbnails] = useState<Map<number, string>>(new Map());
 
-  const runDetection = useCallback(async (): Promise<{
-    coins: { x: number; y: number; width: number; height: number; centerX: number; centerY: number }[];
-    suggestedGrid?: { rows: number; cols: number; overlay: { x: number; y: number; width: number; height: number } };
-  } | null> => {
-    if (!state.frontPhoto) return null;
-    const response = await fetch(state.frontPhoto);
-    const blob = await response.blob();
-    const arrayBuffer = await blob.arrayBuffer();
-    const detectResponse = await fetch("/api/images/detect", {
-      method: "POST",
-      body: arrayBuffer,
-      headers: { "Content-Type": "application/octet-stream" },
+  useEffect(() => {
+    if (state.step !== "coin_entry" || state.coins.length <= 1 || !state.frontPhoto) {
+      return;
+    }
+    let cancelled = false;
+    const urls: string[] = [];
+
+    state.coins.forEach((coin, idx) => {
+      if (coin.frontCrop) {
+        generateCropPreviewUrl(state.frontPhoto!, coin.frontCrop, 60).then((url) => {
+          if (!cancelled) {
+            urls.push(url);
+            setCoinThumbnails((prev) => new Map(prev).set(idx, url));
+          } else {
+            URL.revokeObjectURL(url);
+          }
+        });
+      }
     });
-    if (!detectResponse.ok) throw new Error("Detection failed");
-    return detectResponse.json();
-  }, [state.frontPhoto]);
 
-  const handleAutoDetect = useCallback(async () => {
-    setDetecting(true);
-    try {
-      const result = await runDetection();
-      if (!result || result.coins.length === 0) {
-        toast.info("Keine Münzen erkannt. Bitte manuell positionieren.");
-        return;
-      }
-
-      if (result.coins.length === 1) {
-        const coin = result.coins[0];
-        const size = Math.max(coin.width, coin.height) * 1.1;
-        dispatch({ type: "SELECT_MODE", mode: "single" });
-        dispatch({
-          type: "SET_SINGLE_CROP",
-          crop: {
-            x: Math.max(0, coin.centerX - size / 2),
-            y: Math.max(0, coin.centerY - size / 2),
-            width: size,
-            height: size,
-          },
-        });
-        toast.success("Münze erkannt!");
-      } else if (result.suggestedGrid) {
-        dispatch({ type: "SELECT_MODE", mode: "grid" });
-        dispatch({
-          type: "SET_GRID_CONFIG",
-          config: {
-            rows: result.suggestedGrid.rows,
-            cols: result.suggestedGrid.cols,
-            emptySlots: [],
-          },
-        });
-        dispatch({
-          type: "SET_GRID_OVERLAY",
-          overlay: result.suggestedGrid.overlay,
-        });
-        toast.success(
-          `${result.coins.length} Münzen erkannt (${result.suggestedGrid.rows}×${result.suggestedGrid.cols} Grid)`
-        );
-      } else {
-        // Multiple coins without clear grid → multi mode
-        dispatch({ type: "SELECT_MODE", mode: "multi" });
-        for (const coin of result.coins) {
-          const size = Math.max(coin.width, coin.height) * 1.1;
-          dispatch({
-            type: "ADD_MULTI_CROP",
-            crop: {
-              id: crypto.randomUUID(),
-              crop: {
-                x: Math.max(0, coin.centerX - size / 2),
-                y: Math.max(0, coin.centerY - size / 2),
-                width: size,
-                height: size,
-              },
-            },
-          });
-        }
-        toast.success(
-          `${result.coins.length} Münzen erkannt (Multi-Modus)`
-        );
-      }
-    } catch {
-      toast.error("Auto-Erkennung fehlgeschlagen");
-    } finally {
-      setDetecting(false);
-    }
-  }, [runDetection, dispatch]);
-
-  const handleAutoDetectSingle = useCallback(async () => {
-    setDetecting(true);
-    try {
-      const result = await runDetection();
-      if (!result || result.coins.length === 0) {
-        toast.info("Keine Münze erkannt.");
-        return;
-      }
-      // Pick the largest detected coin
-      const coin = result.coins.reduce((a, b) =>
-        b.width * b.height > a.width * a.height ? b : a
-      );
-      const size = Math.max(coin.width, coin.height) * 1.1;
-      dispatch({
-        type: "SET_SINGLE_CROP",
-        crop: {
-          x: Math.max(0, coin.centerX - size / 2),
-          y: Math.max(0, coin.centerY - size / 2),
-          width: size,
-          height: size,
-        },
-      });
-      toast.success("Münze erkannt!");
-    } catch {
-      toast.error("Auto-Erkennung fehlgeschlagen");
-    } finally {
-      setDetecting(false);
-    }
-  }, [runDetection, dispatch]);
-
-  const handleAutoDetectGrid = useCallback(async () => {
-    setDetecting(true);
-    try {
-      const result = await runDetection();
-      if (!result || result.coins.length === 0) {
-        toast.info("Keine Münzen erkannt.");
-        return;
-      }
-      if (result.suggestedGrid) {
-        dispatch({
-          type: "SET_GRID_CONFIG",
-          config: {
-            rows: result.suggestedGrid.rows,
-            cols: result.suggestedGrid.cols,
-            emptySlots: [],
-          },
-        });
-        dispatch({
-          type: "SET_GRID_OVERLAY",
-          overlay: result.suggestedGrid.overlay,
-        });
-        toast.success(
-          `${result.coins.length} Münzen erkannt (${result.suggestedGrid.rows}×${result.suggestedGrid.cols})`
-        );
-      } else {
-        toast.info("Kein klares Grid erkannt. Bitte manuell konfigurieren.");
-      }
-    } catch {
-      toast.error("Auto-Erkennung fehlgeschlagen");
-    } finally {
-      setDetecting(false);
-    }
-  }, [runDetection, dispatch]);
-
-  const handleAutoDetectMulti = useCallback(async () => {
-    setDetecting(true);
-    try {
-      const result = await runDetection();
-      if (!result || result.coins.length === 0) {
-        toast.info("Keine Münzen erkannt.");
-        return;
-      }
-      for (const coin of result.coins) {
-        const size = Math.max(coin.width, coin.height) * 1.1;
-        dispatch({
-          type: "ADD_MULTI_CROP",
-          crop: {
-            id: crypto.randomUUID(),
-            crop: {
-              x: Math.max(0, coin.centerX - size / 2),
-              y: Math.max(0, coin.centerY - size / 2),
-              width: size,
-              height: size,
-            },
-          },
-        });
-      }
-      toast.success(`${result.coins.length} Münzen erkannt!`);
-    } catch {
-      toast.error("Auto-Erkennung fehlgeschlagen");
-    } finally {
-      setDetecting(false);
-    }
-  }, [runDetection, dispatch]);
+    return () => {
+      cancelled = true;
+      urls.forEach((u) => URL.revokeObjectURL(u));
+      setCoinThumbnails(new Map());
+    };
+  }, [state.step, state.coins, state.frontPhoto]);
 
   // Front-side preview for multi back-align step
   const [multiBackPreview, setMultiBackPreview] = useState<string | null>(null);
@@ -623,13 +581,7 @@ export default function CapturePage() {
           fileInputRef.current?.click();
         }
       } else if (step === "select_mode") {
-        if (e.key === "b" || e.key === "B") {
-          e.preventDefault();
-          dispatch({ type: "MARK_AS_BACK" });
-        } else if (e.key === "a" || e.key === "A") {
-          e.preventDefault();
-          if (!detecting) handleAutoDetect();
-        } else if (e.key === "1") {
+        if (e.key === "1") {
           e.preventDefault();
           dispatch({ type: "SELECT_MODE", mode: "single" });
         } else if (e.key === "2") {
@@ -638,65 +590,41 @@ export default function CapturePage() {
         } else if (e.key === "3") {
           e.preventDefault();
           dispatch({ type: "SELECT_MODE", mode: "multi" });
-        } else if (e.key === "n" || e.key === "N") {
+        } else if (e.key === "4") {
           e.preventDefault();
           dispatch({ type: "SELECT_MODE", mode: "numisbrief" });
-        } else if (e.key === "Escape") {
+        } else if (e.key === "5") {
           e.preventDefault();
-          dispatch({ type: "RESET" });
-        }
-      } else if (step === "numisbrief_crop") {
-        if (e.key === "Enter") {
+          dispatch({ type: "MARK_AS_BACK" });
+        } else if (e.key === " ") {
           e.preventDefault();
-          dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" });
-        } else if (e.key === "r" || e.key === "R") {
+          // Space = default = Einzelmünze
+          dispatch({ type: "SELECT_MODE", mode: "single" });
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
-          if (!rotating) handleRotateFront();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dispatch({ type: "RESET" });
-        }
-      } else if (step === "numisbrief_back_capture") {
-        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
-          e.preventDefault();
-          captureNumisbriefBack();
-        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
-          e.preventDefault();
-          backFileInputRef.current?.click();
-        } else if (e.key === "s" || e.key === "S") {
-          e.preventDefault();
-          dispatch({ type: "SKIP_NUMISBRIEF_BACK" });
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dispatch({ type: "RESET" });
-        }
-      } else if (step === "numisbrief_back_crop") {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" });
-        } else if (e.key === "r" || e.key === "R") {
-          e.preventDefault();
-          if (!rotating) handleRotateBack();
-        } else if (e.key === "s" || e.key === "S") {
-          e.preventDefault();
-          dispatch({ type: "SKIP_NUMISBRIEF_BACK" });
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dispatch({ type: "RETAKE_NUMISBRIEF_BACK" });
+          if (cameraConnected && !retaking) retakeFront();
         }
       } else if (step === "single_crop") {
-        if (e.key === "Enter") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
-          dispatch({ type: "CONFIRM_SINGLE_CROP" });
-        } else if (e.key === "a" || e.key === "A") {
-          e.preventDefault();
-          if (!detecting) handleAutoDetectSingle();
-        } else if (e.key === "r" || e.key === "R") {
+          if (state.singleCrop) dispatch({ type: "CONFIRM_SINGLE_CROP" });
+        } else if (e.key === "1") {
           e.preventDefault();
           if (!rotating) handleRotateFront();
-        } else if (e.key === "Escape") {
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
-          dispatch({ type: "RESET" });
+          if (cameraConnected && !retaking) retakeFront();
+        }
+      } else if (step === "numisbrief_crop") {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          if (state.numisbriefCrop) dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" });
+        } else if (e.key === "1") {
+          e.preventDefault();
+          if (!rotating) handleRotateFront();
+        } else if (e.key === "^" || e.key === "Dead") {
+          e.preventDefault();
+          if (cameraConnected && !retaking) retakeFront();
         }
       } else if (step === "single_back_capture") {
         if ((e.key === " " || e.key === "Enter") && cameraConnected) {
@@ -705,43 +633,56 @@ export default function CapturePage() {
         } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
           e.preventDefault();
           backFileInputRef.current?.click();
-        } else if (e.key === "s" || e.key === "S") {
+        } else if (e.key === "1") {
           e.preventDefault();
           dispatch({ type: "SKIP_SINGLE_BACK" });
-        } else if (e.key === "Escape") {
+        }
+      } else if (step === "numisbrief_back_capture") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
           e.preventDefault();
-          dispatch({ type: "RESET" });
+          captureNumisbriefBack();
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "1") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_NUMISBRIEF_BACK" });
         }
       } else if (step === "single_back_crop") {
-        if (e.key === "Enter") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
-          dispatch({ type: "CONFIRM_SINGLE_BACK_CROP" });
-        } else if (e.key === "r" || e.key === "R") {
+          if (state.singleBackCrop) dispatch({ type: "CONFIRM_SINGLE_BACK_CROP" });
+        } else if (e.key === "1") {
           e.preventDefault();
           if (!rotating) handleRotateBack();
-        } else if (e.key === "s" || e.key === "S") {
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
-          dispatch({ type: "SKIP_SINGLE_BACK" });
-        } else if (e.key === "Escape") {
+          if (cameraConnected && !retaking) retakeBack();
+        }
+      } else if (step === "numisbrief_back_crop") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
-          dispatch({ type: "RETAKE_SINGLE_BACK" });
+          if (state.numisbriefBackCrop) dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" });
+        } else if (e.key === "1") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "^" || e.key === "Dead") {
+          e.preventDefault();
+          if (cameraConnected && !retaking) retakeBack();
         }
       } else if (step === "grid_config") {
-        if (e.key === "Enter") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
           if (gridCoinCount > 0) dispatch({ type: "CONFIRM_GRID_FRONT" });
-        } else if (e.key === "a" || e.key === "A") {
-          e.preventDefault();
-          if (!detecting) handleAutoDetectGrid();
-        } else if (e.key === "r" || e.key === "R") {
+        } else if (e.key === "1") {
           e.preventDefault();
           if (!rotating) handleRotateFront();
-        } else if (e.key === "Escape") {
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
-          dispatch({ type: "RESET" });
+          if (cameraConnected && !retaking) retakeFront();
         }
       } else if (step === "multi_crop") {
-        if (e.key === "Enter") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
           if (state.multiCrops.length > 0)
             dispatch({ type: "CONFIRM_MULTI_FRONT" });
@@ -752,15 +693,23 @@ export default function CapturePage() {
               type: "DELETE_MULTI_CROP",
               id: state.selectedMultiCropId,
             });
-        } else if (e.key === "a" || e.key === "A") {
-          e.preventDefault();
-          if (!detecting) handleAutoDetectMulti();
-        } else if (e.key === "r" || e.key === "R") {
+        } else if (e.key === "1") {
           e.preventDefault();
           if (!rotating) handleRotateFront();
-        } else if (e.key === "Escape") {
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
-          dispatch({ type: "RESET" });
+          if (cameraConnected && !retaking) retakeFront();
+        }
+      } else if (step === "grid_back_capture") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
+          e.preventDefault();
+          handleCaptureBack();
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "1") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_BACK_CAPTURE" });
         }
       } else if (step === "multi_back_capture") {
         if ((e.key === " " || e.key === "Enter") && cameraConnected) {
@@ -769,23 +718,30 @@ export default function CapturePage() {
         } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
           e.preventDefault();
           backFileInputRef.current?.click();
-        } else if (e.key === "s" || e.key === "S") {
+        } else if (e.key === "1") {
           e.preventDefault();
           dispatch({ type: "SKIP_MULTI_BACK" });
-        } else if (e.key === "Escape") {
+        }
+      } else if (step === "grid_back_align") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
-          dispatch({ type: "RESET" });
+          dispatch({ type: "CONFIRM_BACK_GRID_ALIGN" });
+        } else if (e.key === "1") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "^" || e.key === "Dead") {
+          e.preventDefault();
+          dispatch({ type: "RETAKE_BACK" });
         }
       } else if (step === "multi_back_align") {
-        if (e.key === "Enter") {
+        if (e.key === " " || e.key === "Enter") {
           e.preventDefault();
           dispatch({ type: "CONFIRM_MULTI_BACK_ALIGN" });
-        } else if (e.key === "r" || e.key === "R") {
+        } else if (e.key === "1") {
           e.preventDefault();
           if (!rotating) handleRotateBack();
         } else if (e.key === "Tab") {
           e.preventDefault();
-          // Cycle through multi back crops
           const crops = state.multiBackCrops;
           if (crops.length > 0) {
             const currentIdx = crops.findIndex(
@@ -799,42 +755,19 @@ export default function CapturePage() {
               id: crops[nextIdx].id,
             });
           }
-        } else if (e.key === "Escape") {
+        } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
           dispatch({ type: "RETAKE_MULTI_BACK" });
         }
-      } else if (step === "grid_back_capture") {
-        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
+      } else if (step === "coin_entry" && state.coins.length > 1) {
+        const tag = (e.target as HTMLElement).tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (e.key === "ArrowUp" && state.currentCoinIndex > 0) {
           e.preventDefault();
-          handleCaptureBack();
-        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
+          dispatch({ type: "GO_TO_COIN", index: state.currentCoinIndex - 1 });
+        } else if (e.key === "ArrowDown" && state.currentCoinIndex < state.coins.length - 1) {
           e.preventDefault();
-          backFileInputRef.current?.click();
-        } else if (e.key === "s" || e.key === "S") {
-          e.preventDefault();
-          dispatch({ type: "SKIP_BACK_CAPTURE" });
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dispatch({ type: "RESET" });
-        }
-      } else if (step === "grid_back_align") {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          dispatch({ type: "CONFIRM_BACK_GRID_ALIGN" });
-        } else if (e.key === "r" || e.key === "R") {
-          e.preventDefault();
-          if (!rotating) handleRotateBack();
-        } else if (e.key === "Escape") {
-          e.preventDefault();
-          dispatch({ type: "RETAKE_BACK" });
-        }
-      } else if (step === "saved") {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          dispatch({ type: "CONTINUE_WITH_SESSION" });
-        } else if (e.key === "n" || e.key === "N") {
-          e.preventDefault();
-          dispatch({ type: "START_FRESH" });
+          dispatch({ type: "GO_TO_COIN", index: state.currentCoinIndex + 1 });
         }
       }
     };
@@ -843,15 +776,15 @@ export default function CapturePage() {
     return () => window.removeEventListener("keydown", handler);
   }, [
     state.step, state.multiCrops, state.multiBackCrops,
-    state.selectedMultiCropId, detecting, rotating, gridCoinCount,
-    cameraConnected, capturePhoto, captureBackPhoto, captureNumisbriefBack, handleAutoDetect,
-    handleAutoDetectSingle, handleAutoDetectGrid, handleAutoDetectMulti,
+    state.selectedMultiCropId, state.currentCoinIndex, state.coins.length,
+    rotating, retaking, gridCoinCount,
+    cameraConnected, capturePhoto, captureBackPhoto, captureNumisbriefBack,
     handleRotateFront, handleRotateBack, handleCaptureBack,
-    dispatch,
+    retakeFront, retakeBack, dispatch,
   ]);
 
   return (
-    <div className="container mx-auto px-4 py-8">
+    <div className="mx-auto max-w-screen-2xl px-4 py-8">
       <h1 className="mb-6 text-3xl font-bold">Münzen erfassen</h1>
 
       {/* Hidden file inputs */}
@@ -907,14 +840,6 @@ export default function CapturePage() {
           <div className="flex flex-wrap gap-4">
             <Button
               size="lg"
-              onClick={handleAutoDetect}
-              disabled={detecting}
-            >
-              {detecting ? "Erkennung..." : <>Auto-Erkennung<Kbd>A</Kbd></>}
-            </Button>
-            <Button
-              size="lg"
-              variant="outline"
               onClick={() =>
                 dispatch({ type: "SELECT_MODE", mode: "single" })
               }
@@ -946,204 +871,69 @@ export default function CapturePage() {
                 dispatch({ type: "SELECT_MODE", mode: "numisbrief" })
               }
             >
-              Numisbrief<Kbd>N</Kbd>
+              Numisbrief<Kbd>4</Kbd>
             </Button>
             <Button
               size="lg"
               variant={state.backOnly ? "default" : "outline"}
               onClick={() => dispatch({ type: "MARK_AS_BACK" })}
             >
-              Dies ist die Rückseite<Kbd>B</Kbd>
+              Dies ist die Rückseite<Kbd>5</Kbd>
             </Button>
-            <Button
-              size="lg"
-              variant="ghost"
-              onClick={() => dispatch({ type: "RESET" })}
-            >
-              Neu aufnehmen<Kbd>Esc</Kbd>
-            </Button>
+            {cameraConnected && (
+              <Button
+                size="lg"
+                variant="ghost"
+                onClick={retakeFront}
+                disabled={retaking}
+              >
+                {retaking ? "Aufnahme..." : <>Neu aufnehmen<Kbd>^</Kbd></>}
+              </Button>
+            )}
           </div>
           {state.frontPhoto && (
-            <img
-              src={state.frontPhoto}
-              alt="Aufnahme"
-              className="max-h-96 rounded-lg border"
-            />
+            <div className="flex justify-center">
+              <img
+                src={state.frontPhoto}
+                alt="Aufnahme"
+                className="max-h-[70vh] w-auto rounded-lg border object-contain"
+              />
+            </div>
           )}
         </div>
       )}
 
-      {/* Step: Numisbrief crop */}
-      {state.step === "numisbrief_crop" &&
-        state.frontPhoto &&
-        state.numisbriefCrop && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Numisbrief — Ausschnitt wählen</h2>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleRotateFront}
-                  disabled={rotating}
-                >
-                  Drehen<Kbd>R</Kbd>
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => dispatch({ type: "RESET" })}
-                >
-                  Neu aufnehmen<Kbd>Esc</Kbd>
-                </Button>
-                <Button
-                  onClick={() =>
-                    dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" })
-                  }
-                >
-                  Bestätigen<Kbd>↵</Kbd>
-                </Button>
-              </div>
-            </div>
-            <PhotoCanvas
-              imageSrc={state.frontPhoto}
-              imageWidth={state.imageWidth}
-              imageHeight={state.imageHeight}
-              crop={state.numisbriefCrop}
-              onCropChange={handleNumisbriefCropChange}
-              freeAspect
-            />
-            <p className="text-sm text-muted-foreground">
-              Ziehe den Ausschnitt über den Numisbrief. Ecken zum
-              Vergrößern/Verkleinern.
-            </p>
-          </div>
-        )}
-
-      {/* Step: Numisbrief back capture */}
-      {state.step === "numisbrief_back_capture" && (
-        <div className="space-y-6">
-          <h2 className="text-lg font-semibold">Rückseite aufnehmen</h2>
-          <p className="text-muted-foreground">
-            Drehe den Numisbrief um und nehme ein Foto der Rückseite auf.
-          </p>
-          <div className="flex flex-wrap gap-3">
-            {cameraConnected ? (
-              <Button size="lg" onClick={captureNumisbriefBack}>
-                Rückseite aufnehmen<Kbd>↵</Kbd>
-              </Button>
-            ) : (
-              <>
-                <Button
-                  size="lg"
-                  variant="outline"
-                  onClick={() => backFileInputRef.current?.click()}
-                >
-                  Bild laden<Kbd>L</Kbd>
-                </Button>
-              </>
-            )}
-            <Button
-              size="lg"
-              variant="ghost"
-              onClick={() =>
-                dispatch({ type: "SKIP_NUMISBRIEF_BACK" })
-              }
-            >
-              Überspringen<Kbd>S</Kbd>
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Step: Numisbrief back crop */}
-      {state.step === "numisbrief_back_crop" &&
-        state.backPhoto &&
-        state.numisbriefBackCrop && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Numisbrief Rückseite — Ausschnitt wählen</h2>
-              <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleRotateBack}
-                  disabled={rotating}
-                >
-                  Drehen<Kbd>R</Kbd>
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    dispatch({ type: "SKIP_NUMISBRIEF_BACK" })
-                  }
-                >
-                  Überspringen<Kbd>S</Kbd>
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    dispatch({ type: "RETAKE_NUMISBRIEF_BACK" })
-                  }
-                >
-                  Neu aufnehmen<Kbd>Esc</Kbd>
-                </Button>
-                <Button
-                  onClick={() =>
-                    dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" })
-                  }
-                >
-                  Bestätigen<Kbd>↵</Kbd>
-                </Button>
-              </div>
-            </div>
-            <PhotoCanvas
-              imageSrc={state.backPhoto}
-              imageWidth={state.backImageWidth}
-              imageHeight={state.backImageHeight}
-              crop={state.numisbriefBackCrop}
-              onCropChange={handleNumisbriefBackCropChange}
-              freeAspect
-            />
-            <p className="text-sm text-muted-foreground">
-              Ziehe den Ausschnitt über die Rückseite des Numisbriefs.
-            </p>
-          </div>
-        )}
-
       {/* Step: Single crop */}
       {state.step === "single_crop" &&
-        state.frontPhoto &&
-        state.singleCrop && (
+        state.frontPhoto && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Ausschnitt wählen</h2>
+              <h2 className="text-lg font-semibold">
+                {state.singleCrop ? "Ausschnitt wählen" : "Zeichne einen Ausschnitt"}
+              </h2>
               <div className="flex gap-2">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={handleAutoDetectSingle}
-                  disabled={detecting}
-                >
-                  {detecting ? "..." : <>Auto<Kbd>A</Kbd></>}
-                </Button>
                 <Button
                   variant="secondary"
                   size="sm"
                   onClick={handleRotateFront}
                   disabled={rotating}
                 >
-                  Drehen<Kbd>R</Kbd>
+                  Drehen<Kbd>1</Kbd>
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => dispatch({ type: "RESET" })}
-                >
-                  Neu aufnehmen<Kbd>Esc</Kbd>
-                </Button>
+                {cameraConnected && (
+                  <Button
+                    variant="ghost"
+                    onClick={retakeFront}
+                    disabled={retaking}
+                  >
+                    {retaking ? "..." : <>Neu aufnehmen<Kbd>^</Kbd></>}
+                  </Button>
+                )}
                 <Button
                   onClick={() =>
                     dispatch({ type: "CONFIRM_SINGLE_CROP" })
                   }
+                  disabled={!state.singleCrop}
                 >
                   Bestätigen<Kbd>↵</Kbd>
                 </Button>
@@ -1157,8 +947,7 @@ export default function CapturePage() {
               onCropChange={handleCropChange}
             />
             <p className="text-sm text-muted-foreground">
-              Ziehe den Ausschnitt über die Münze. Ecken zum
-              Vergrößern/Verkleinern.
+              Zeichne einen Ausschnitt um die Münze. Shift halten für quadratisch.
             </p>
           </div>
         )}
@@ -1187,13 +976,7 @@ export default function CapturePage() {
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
             >
-              Überspringen<Kbd>S</Kbd>
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => dispatch({ type: "RESET" })}
-            >
-              Neu aufnehmen<Kbd>Esc</Kbd>
+              Überspringen<Kbd>1</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -1204,7 +987,7 @@ export default function CapturePage() {
               <img
                 src={state.frontPhoto}
                 alt="Vorderseite"
-                className="max-h-64 rounded-lg border"
+                className="max-h-[40vh] w-auto rounded-lg border object-contain"
               />
             </div>
           )}
@@ -1213,12 +996,11 @@ export default function CapturePage() {
 
       {/* Step: Single back crop */}
       {state.step === "single_back_crop" &&
-        state.backPhoto &&
-        state.singleBackCrop && (
+        state.backPhoto && (
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-lg font-semibold">
-                Rückseite: Ausschnitt wählen
+                {state.singleBackCrop ? "Rückseite: Ausschnitt wählen" : "Zeichne einen Ausschnitt"}
               </h2>
               <div className="flex gap-2">
                 <Button
@@ -1227,26 +1009,22 @@ export default function CapturePage() {
                   onClick={handleRotateBack}
                   disabled={rotating}
                 >
-                  Drehen<Kbd>R</Kbd>
+                  Drehen<Kbd>1</Kbd>
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() =>
-                    dispatch({ type: "RETAKE_SINGLE_BACK" })
-                  }
-                >
-                  Rückseite neu<Kbd>Esc</Kbd>
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
-                >
-                  Ohne Rückseite<Kbd>S</Kbd>
-                </Button>
+                {cameraConnected && (
+                  <Button
+                    variant="ghost"
+                    onClick={retakeBack}
+                    disabled={retaking}
+                  >
+                    {retaking ? "..." : <>Neu aufnehmen<Kbd>^</Kbd></>}
+                  </Button>
+                )}
                 <Button
                   onClick={() =>
                     dispatch({ type: "CONFIRM_SINGLE_BACK_CROP" })
                   }
+                  disabled={!state.singleBackCrop}
                 >
                   Bestätigen<Kbd>↵</Kbd>
                 </Button>
@@ -1260,7 +1038,139 @@ export default function CapturePage() {
               onCropChange={handleBackCropChange}
             />
             <p className="text-sm text-muted-foreground">
-              Ziehe den Ausschnitt über die Rückseite der Münze.
+              Zeichne einen Ausschnitt um die Rückseite. Shift halten für quadratisch.
+            </p>
+          </div>
+        )}
+
+      {/* Step: Numisbrief crop */}
+      {state.step === "numisbrief_crop" &&
+        state.frontPhoto && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                {state.numisbriefCrop ? "Numisbrief — Ausschnitt wählen" : "Zeichne einen Ausschnitt"}
+              </h2>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateFront}
+                  disabled={rotating}
+                >
+                  Drehen<Kbd>1</Kbd>
+                </Button>
+                {cameraConnected && (
+                  <Button
+                    variant="ghost"
+                    onClick={retakeFront}
+                    disabled={retaking}
+                  >
+                    {retaking ? "..." : <>Neu aufnehmen<Kbd>^</Kbd></>}
+                  </Button>
+                )}
+                <Button
+                  onClick={() =>
+                    dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" })
+                  }
+                  disabled={!state.numisbriefCrop}
+                >
+                  Bestätigen<Kbd>↵</Kbd>
+                </Button>
+              </div>
+            </div>
+            <PhotoCanvas
+              imageSrc={state.frontPhoto}
+              imageWidth={state.imageWidth}
+              imageHeight={state.imageHeight}
+              crop={state.numisbriefCrop}
+              onCropChange={handleNumisbriefCropChange}
+            />
+            <p className="text-sm text-muted-foreground">
+              Zeichne einen Ausschnitt um den Numisbrief. Shift halten für quadratisch.
+            </p>
+          </div>
+        )}
+
+      {/* Step: Numisbrief back capture */}
+      {state.step === "numisbrief_back_capture" && (
+        <div className="space-y-6">
+          <h2 className="text-lg font-semibold">Rückseite aufnehmen</h2>
+          <p className="text-muted-foreground">
+            Drehe den Numisbrief um und nehme ein Foto der Rückseite auf.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {cameraConnected ? (
+              <Button size="lg" onClick={captureNumisbriefBack}>
+                Rückseite aufnehmen<Kbd>↵</Kbd>
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={() => backFileInputRef.current?.click()}
+              >
+                Bild laden<Kbd>L</Kbd>
+              </Button>
+            )}
+            <Button
+              size="lg"
+              variant="ghost"
+              onClick={() =>
+                dispatch({ type: "SKIP_NUMISBRIEF_BACK" })
+              }
+            >
+              Überspringen<Kbd>1</Kbd>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Step: Numisbrief back crop */}
+      {state.step === "numisbrief_back_crop" &&
+        state.backPhoto && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">
+                {state.numisbriefBackCrop ? "Numisbrief Rückseite — Ausschnitt wählen" : "Zeichne einen Ausschnitt"}
+              </h2>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateBack}
+                  disabled={rotating}
+                >
+                  Drehen<Kbd>1</Kbd>
+                </Button>
+                {cameraConnected && (
+                  <Button
+                    variant="ghost"
+                    onClick={retakeBack}
+                    disabled={retaking}
+                  >
+                    {retaking ? "..." : <>Neu aufnehmen<Kbd>^</Kbd></>}
+                  </Button>
+                )}
+                <Button
+                  onClick={() =>
+                    dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" })
+                  }
+                  disabled={!state.numisbriefBackCrop}
+                >
+                  Bestätigen<Kbd>↵</Kbd>
+                </Button>
+              </div>
+            </div>
+            <PhotoCanvas
+              imageSrc={state.backPhoto}
+              imageWidth={state.backImageWidth}
+              imageHeight={state.backImageHeight}
+              crop={state.numisbriefBackCrop}
+              onCropChange={handleNumisbriefBackCropChange}
+            />
+            <p className="text-sm text-muted-foreground">
+              Zeichne einen Ausschnitt um die Rückseite des Numisbriefs. Shift halten für quadratisch.
             </p>
           </div>
         )}
@@ -1279,7 +1189,7 @@ export default function CapturePage() {
                 onClick={handleRotateFront}
                 disabled={rotating}
               >
-                Drehen<Kbd>R</Kbd>
+                Drehen<Kbd>1</Kbd>
               </Button>
             </div>
             <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -1306,9 +1216,10 @@ export default function CapturePage() {
                   dispatch({ type: "SET_FLIP_MODE", flipMode })
                 }
                 onConfirm={() => dispatch({ type: "CONFIRM_GRID_FRONT" })}
-                onCancel={() => dispatch({ type: "RESET" })}
-                onAutoDetect={handleAutoDetectGrid}
-                autoDetecting={detecting}
+                onCancel={() => {
+                  if (cameraConnected) retakeFront();
+                  else dispatch({ type: "RESET" });
+                }}
                 coinCount={gridCoinCount}
               />
             </div>
@@ -1326,9 +1237,7 @@ export default function CapturePage() {
             Rückseite aufnehmen
           </h2>
           <p className="text-muted-foreground">
-            {state.flipMode === "book"
-              ? "Drehe die Münzseite wie ein Buch um und nehme ein Foto der Rückseiten auf. Das Bild wird automatisch gespiegelt."
-              : "Drehe alle Münzen einzeln um und nehme ein Foto der Rückseiten auf."}
+            Drehe die Münzen um und nehme ein Foto der Rückseiten auf.
           </p>
           <div className="flex gap-4">
             {cameraConnected ? (
@@ -1347,13 +1256,7 @@ export default function CapturePage() {
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_BACK_CAPTURE" })}
             >
-              Überspringen<Kbd>S</Kbd>
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => dispatch({ type: "RESET" })}
-            >
-              Neu aufnehmen<Kbd>Esc</Kbd>
+              Überspringen<Kbd>1</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -1364,7 +1267,7 @@ export default function CapturePage() {
               <img
                 src={state.frontPhoto}
                 alt="Vorderseite"
-                className="max-h-64 rounded-lg border"
+                className="max-h-[40vh] w-auto rounded-lg border object-contain"
               />
             </div>
           )}
@@ -1387,7 +1290,7 @@ export default function CapturePage() {
                 onClick={handleRotateBack}
                 disabled={rotating}
               >
-                Drehen<Kbd>R</Kbd>
+                Drehen<Kbd>1</Kbd>
               </Button>
             </div>
             <p className="text-muted-foreground">
@@ -1424,7 +1327,7 @@ export default function CapturePage() {
                     variant="outline"
                     onClick={() => dispatch({ type: "RETAKE_BACK" })}
                   >
-                    Rückseite neu<Kbd>Esc</Kbd>
+                    Neu aufnehmen<Kbd>^</Kbd>
                   </Button>
                 </div>
               </div>
@@ -1443,7 +1346,7 @@ export default function CapturePage() {
               onClick={handleRotateFront}
               disabled={rotating}
             >
-              Drehen<Kbd>R</Kbd>
+              Drehen<Kbd>1</Kbd>
             </Button>
           </div>
           <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -1473,9 +1376,10 @@ export default function CapturePage() {
                 dispatch({ type: "SET_FLIP_MODE", flipMode })
               }
               onConfirm={() => dispatch({ type: "CONFIRM_MULTI_FRONT" })}
-              onCancel={() => dispatch({ type: "RESET" })}
-              onAutoDetect={handleAutoDetectMulti}
-              autoDetecting={detecting}
+              onCancel={() => {
+                if (cameraConnected) retakeFront();
+                else dispatch({ type: "RESET" });
+              }}
               onDeleteSelected={() => {
                 if (state.selectedMultiCropId)
                   dispatch({
@@ -1494,9 +1398,7 @@ export default function CapturePage() {
         <div className="space-y-6">
           <h2 className="text-lg font-semibold">Rückseite aufnehmen</h2>
           <p className="text-muted-foreground">
-            {state.flipMode === "book"
-              ? "Drehe die Münzen wie ein Buch um. Das Bild wird automatisch gespiegelt."
-              : "Drehe alle Münzen einzeln um und nehme ein Foto der Rückseiten auf."}
+            Drehe die Münzen um und nehme ein Foto der Rückseiten auf.
           </p>
           <div className="flex gap-4">
             {cameraConnected ? (
@@ -1515,13 +1417,7 @@ export default function CapturePage() {
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_MULTI_BACK" })}
             >
-              Überspringen<Kbd>S</Kbd>
-            </Button>
-            <Button
-              variant="ghost"
-              onClick={() => dispatch({ type: "RESET" })}
-            >
-              Neu aufnehmen<Kbd>Esc</Kbd>
+              Überspringen<Kbd>1</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -1532,7 +1428,7 @@ export default function CapturePage() {
               <img
                 src={state.frontPhoto}
                 alt="Vorderseite"
-                className="max-h-64 rounded-lg border"
+                className="max-h-[40vh] w-auto rounded-lg border object-contain"
               />
             </div>
           )}
@@ -1552,7 +1448,7 @@ export default function CapturePage() {
               onClick={handleRotateBack}
               disabled={rotating}
             >
-              Drehen<Kbd>R</Kbd>
+              Drehen<Kbd>1</Kbd>
             </Button>
           </div>
           <div className="grid gap-6 lg:grid-cols-[1fr_250px]">
@@ -1605,7 +1501,7 @@ export default function CapturePage() {
                     dispatch({ type: "RETAKE_MULTI_BACK" })
                   }
                 >
-                  Rückseite neu<Kbd>Esc</Kbd>
+                  Neu aufnehmen<Kbd>^</Kbd>
                 </Button>
               </div>
             </div>
@@ -1615,55 +1511,126 @@ export default function CapturePage() {
 
       {/* Step: Coin entry */}
       {state.step === "coin_entry" && (
-        <div className="grid gap-8 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>
-                Münzdaten erfassen
-                {state.coins.length > 1 && (
-                  <span className="ml-2 text-base font-normal text-muted-foreground">
-                    ({state.currentCoinIndex + 1} / {state.coins.length})
-                  </span>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <CoinForm
-                key={state.currentCoinIndex}
-                defaults={state.sessionDefaults}
-                frontImageUrl={frontPreviewUrl ?? undefined}
-                backImageUrl={backPreviewUrl ?? undefined}
-                onSave={handleSaveCoin}
-                onSkip={
-                  state.coins.length > 1
-                    ? () => dispatch({ type: "COIN_SAVED" })
-                    : undefined
-                }
-                coinIndex={state.currentCoinIndex}
-                totalCoins={state.coins.length}
-                saving={false}
-                cameraConnected={cameraConnected}
-                collections={collections}
-                onCollectionsChange={setCollections}
-              />
-            </CardContent>
-          </Card>
-          <div className="space-y-4">
-            {state.mode === "grid" &&
-              state.coins.length > 1 &&
-              state.coins[state.currentCoinIndex] && (
-                <div className="text-sm text-muted-foreground">
-                  Position: Zeile{" "}
-                  {(state.coins[state.currentCoinIndex].gridRow ?? 0) + 1},
-                  Spalte{" "}
-                  {(state.coins[state.currentCoinIndex].gridCol ?? 0) + 1}
-                </div>
-              )}
-            {state.mode === "multi" && state.coins.length > 1 && (
-              <div className="text-sm text-muted-foreground">
-                Münze {state.currentCoinIndex + 1} von {state.coins.length}
+        <div className={state.coins.length > 1 ? "flex gap-6" : ""}>
+          {/* Coin sidebar for multi-coin */}
+          {state.coins.length > 1 && (
+            <div className="w-48 shrink-0 space-y-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-semibold">Münzen</h3>
+                <span className="text-xs text-muted-foreground">
+                  {state.currentCoinIndex + 1}/{state.coins.length}
+                </span>
               </div>
-            )}
+              <div className="flex gap-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={state.currentCoinIndex === 0}
+                  onClick={() => dispatch({ type: "PREV_COIN" })}
+                >
+                  ←
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={state.currentCoinIndex >= state.coins.length - 1}
+                  onClick={() => dispatch({ type: "NEXT_COIN" })}
+                >
+                  →
+                </Button>
+              </div>
+              <div className="space-y-1 max-h-[70vh] overflow-y-auto">
+                {state.coins.map((coin, idx) => {
+                  const isCurrent = idx === state.currentCoinIndex;
+                  const isSaved = savedCoinIndices.has(idx);
+                  const isSkipped = skippedCoinIndices.has(idx);
+                  const thumb = coinThumbnails.get(idx);
+                  return (
+                    <button
+                      key={idx}
+                      onClick={() => dispatch({ type: "GO_TO_COIN", index: idx })}
+                      className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-sm transition-colors ${
+                        isCurrent
+                          ? "border-primary bg-primary/10 font-medium"
+                          : isSaved
+                            ? "border-green-200 bg-green-50 dark:border-green-900 dark:bg-green-950/20"
+                            : isSkipped
+                              ? "border-transparent opacity-60"
+                              : "border-transparent hover:bg-muted"
+                      }`}
+                    >
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={`Münze ${idx + 1}`}
+                          className="h-8 w-8 rounded object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded bg-muted text-xs">
+                          {idx + 1}
+                        </div>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <span>Münze {idx + 1}</span>
+                        {state.mode === "grid" && coin.gridRow != null && (
+                          <span className="ml-1 text-xs text-muted-foreground">
+                            Z{(coin.gridRow ?? 0) + 1}S{(coin.gridCol ?? 0) + 1}
+                          </span>
+                        )}
+                      </div>
+                      {isSaved && (
+                        <span className="text-xs text-green-600">✓</span>
+                      )}
+                      {isSkipped && (
+                        <span className="text-xs text-muted-foreground">–</span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Main form area */}
+          <div className="min-w-0 flex-1">
+            <Card>
+              <CardHeader>
+                <CardTitle>
+                  Münzdaten erfassen
+                  {state.coins.length > 1 && (
+                    <span className="ml-2 text-base font-normal text-muted-foreground">
+                      ({state.currentCoinIndex + 1} / {state.coins.length})
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <CoinForm
+                  key={state.currentCoinIndex}
+                  defaults={state.sessionDefaults}
+                  frontImageUrl={frontPreviewUrl ?? undefined}
+                  backImageUrl={backPreviewUrl ?? undefined}
+                  onSaveAndContinue={handleSaveAndContinue}
+                  onSaveAndNew={handleSaveAndNew}
+                  onSaveAndExit={handleSaveAndExit}
+                  onSkip={
+                    state.coins.length > 1
+                      ? () => {
+                          setSkippedCoinIndices(prev => new Set(prev).add(state.currentCoinIndex));
+                          dispatch({ type: "COIN_SAVED" });
+                        }
+                      : undefined
+                  }
+                  coinIndex={state.currentCoinIndex}
+                  totalCoins={state.coins.length}
+                  saving={saving}
+                  cameraConnected={cameraConnected}
+                  collections={collections}
+                  onCollectionsChange={setCollections}
+                  allCoinsHandled={allHandledAfterSave}
+                />
+              </CardContent>
+            </Card>
           </div>
         </div>
       )}
@@ -1673,32 +1640,6 @@ export default function CapturePage() {
         <div className="flex items-center gap-3">
           <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <span>Münze wird gespeichert...</span>
-        </div>
-      )}
-
-      {/* Step: Saved */}
-      {state.step === "saved" && (
-        <div className="space-y-4">
-          <h2 className="text-lg font-semibold text-green-600">
-            {state.mode === "grid" || state.mode === "multi"
-              ? "Alle Münzen erfolgreich gespeichert!"
-              : "Münze erfolgreich gespeichert!"}
-          </h2>
-          <div className="flex gap-4">
-            <Button
-              onClick={() =>
-                dispatch({ type: "CONTINUE_WITH_SESSION" })
-              }
-            >
-              Weiter mit gleichen Einstellungen<Kbd>↵</Kbd>
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => dispatch({ type: "START_FRESH" })}
-            >
-              Neu (leere Eingabe)<Kbd>N</Kbd>
-            </Button>
-          </div>
         </div>
       )}
     </div>

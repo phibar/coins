@@ -222,3 +222,86 @@ export async function getIssuePrices(
 
   return response.json();
 }
+
+// ──────────────────────────────────────────
+// Numista Collection API (OAuth client_credentials)
+// ──────────────────────────────────────────
+
+interface OAuthToken {
+  access_token: string;
+  user_id: number;
+  expires_at: number; // epoch ms
+}
+
+let cachedToken: OAuthToken | null = null;
+
+async function getAccessToken(): Promise<OAuthToken> {
+  if (cachedToken && cachedToken.expires_at > Date.now() + 60_000) {
+    return cachedToken;
+  }
+
+  const response = await fetch(
+    `${NUMISTA_BASE_URL}/oauth_token?grant_type=client_credentials&scope=view_collection,edit_collection`,
+    { headers: { "Numista-API-Key": getApiKey() } }
+  );
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Numista OAuth error: ${response.status} ${body}`);
+  }
+
+  const data = await response.json();
+  cachedToken = {
+    access_token: data.access_token,
+    user_id: data.user_id,
+    expires_at: Date.now() + data.expires_in * 1000,
+  };
+  return cachedToken;
+}
+
+export interface AddToCollectionParams {
+  numistaTypeId: number;
+  issueId?: number;
+  grade?: string;
+}
+
+export interface CollectedItemResult {
+  id: number;
+}
+
+export async function addToNumistaCollection(
+  params: AddToCollectionParams
+): Promise<CollectedItemResult> {
+  const token = await getAccessToken();
+
+  const body: Record<string, unknown> = {
+    type: params.numistaTypeId,
+    private_comment: "Added via Münzsammlung",
+  };
+  if (params.issueId) {
+    body.issue = params.issueId;
+  }
+  if (params.grade) {
+    body.grade = params.grade;
+  }
+
+  const response = await fetch(
+    `${NUMISTA_BASE_URL}/users/${token.user_id}/collected_items`,
+    {
+      method: "POST",
+      headers: {
+        "Numista-API-Key": getApiKey(),
+        Authorization: `Bearer ${token.access_token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    }
+  );
+
+  if (!response.ok) {
+    const errorBody = await response.text().catch(() => "");
+    throw new Error(`Numista collection error: ${response.status} ${errorBody}`);
+  }
+
+  return response.json();
+}

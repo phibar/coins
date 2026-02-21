@@ -368,20 +368,28 @@ export function MultiCropCanvas({
           x: pos.x / scaleFactor,
           y: pos.y / scaleFactor,
         };
-        const dx = curImg.x - startImg.x;
-        const dy = curImg.y - startImg.y;
-        // Square: use the larger dimension
-        const size = Math.max(Math.abs(dx), Math.abs(dy));
-        if (size < 10) return;
+        let dx = curImg.x - startImg.x;
+        let dy = curImg.y - startImg.y;
 
-        const cropX = dx >= 0 ? startImg.x : startImg.x - size;
-        const cropY = dy >= 0 ? startImg.y : startImg.y - size;
+        if (e.shiftKey) {
+          // Shift held: force square
+          const size = Math.max(Math.abs(dx), Math.abs(dy));
+          dx = dx >= 0 ? size : -size;
+          dy = dy >= 0 ? size : -size;
+        }
+
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 10) return;
+
+        const cropX = dx >= 0 ? startImg.x : startImg.x + dx;
+        const cropY = dy >= 0 ? startImg.y : startImg.y + dy;
+        const w = Math.abs(dx);
+        const h = Math.abs(dy);
 
         setDrawingCrop({
-          x: Math.max(0, Math.min(cropX, imageWidth - size)),
-          y: Math.max(0, Math.min(cropY, imageHeight - size)),
-          width: Math.min(size, imageWidth),
-          height: Math.min(size, imageHeight),
+          x: Math.max(0, Math.min(cropX, imageWidth - w)),
+          y: Math.max(0, Math.min(cropY, imageHeight - h)),
+          width: Math.min(w, imageWidth),
+          height: Math.min(h, imageHeight),
         });
         return;
       }
@@ -399,47 +407,72 @@ export function MultiCropCanvas({
           width: start.width,
           height: start.height,
         };
-      } else {
-        // Resize - maintain square
-        const delta = Math.max(Math.abs(dx), Math.abs(dy));
-        const sign =
-          dragMode === "se"
-            ? 1
-            : dragMode === "nw"
-              ? -1
-              : dragMode === "ne"
-                ? dx > 0
-                  ? 1
-                  : -1
-                : dx < 0
-                  ? 1
-                  : -1;
-        const sizeChange = sign * delta;
+      } else if (e.shiftKey) {
+        // Shift held: resize maintaining square
+        let signedDelta: number;
+        if (dragMode === "se") {
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+        } else if (dragMode === "nw") {
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? -dx : -dy;
+        } else if (dragMode === "ne") {
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? dx : -dy;
+        } else {
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? -dx : dy;
+        }
 
+        const newSize = Math.max(MIN_CROP_SIZE, start.width + signedDelta);
         newCrop = { ...start };
 
         if (dragMode === "se") {
-          newCrop.width = Math.max(MIN_CROP_SIZE, start.width + sizeChange);
-          newCrop.height = newCrop.width;
+          newCrop.width = newSize;
+          newCrop.height = newSize;
         } else if (dragMode === "nw") {
-          const newSize = Math.max(MIN_CROP_SIZE, start.width - sizeChange);
           newCrop.x = start.x + start.width - newSize;
           newCrop.y = start.y + start.height - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
         } else if (dragMode === "ne") {
-          const newSize = Math.max(MIN_CROP_SIZE, start.width + sizeChange);
           newCrop.y = start.y + start.height - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
         } else if (dragMode === "sw") {
-          const newSize = Math.max(MIN_CROP_SIZE, start.width + sizeChange);
           newCrop.x = start.x + start.width - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
         }
 
-        // Clamp to image bounds
+        newCrop.x = Math.max(0, newCrop.x);
+        newCrop.y = Math.max(0, newCrop.y);
+        newCrop.width = Math.min(newCrop.width, imageWidth - newCrop.x);
+        newCrop.height = Math.min(newCrop.height, imageHeight - newCrop.y);
+      } else {
+        // Free resize
+        newCrop = { ...start };
+
+        if (dragMode === "se") {
+          newCrop.width = Math.max(MIN_CROP_SIZE, start.width + dx);
+          newCrop.height = Math.max(MIN_CROP_SIZE, start.height + dy);
+        } else if (dragMode === "nw") {
+          const newW = Math.max(MIN_CROP_SIZE, start.width - dx);
+          const newH = Math.max(MIN_CROP_SIZE, start.height - dy);
+          newCrop.x = start.x + start.width - newW;
+          newCrop.y = start.y + start.height - newH;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        } else if (dragMode === "ne") {
+          const newW = Math.max(MIN_CROP_SIZE, start.width + dx);
+          const newH = Math.max(MIN_CROP_SIZE, start.height - dy);
+          newCrop.y = start.y + start.height - newH;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        } else if (dragMode === "sw") {
+          const newW = Math.max(MIN_CROP_SIZE, start.width - dx);
+          const newH = Math.max(MIN_CROP_SIZE, start.height + dy);
+          newCrop.x = start.x + start.width - newW;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        }
+
         newCrop.x = Math.max(0, newCrop.x);
         newCrop.y = Math.max(0, newCrop.y);
         newCrop.width = Math.min(newCrop.width, imageWidth - newCrop.x);

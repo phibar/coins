@@ -10,8 +10,6 @@ interface MultiConfigPanelProps {
   onFlipModeChange: (mode: FlipMode) => void;
   onConfirm: () => void;
   onCancel: () => void;
-  onAutoDetect?: () => void;
-  autoDetecting?: boolean;
   onDeleteSelected: () => void;
   hasSelection: boolean;
 }
@@ -22,8 +20,6 @@ export function MultiConfigPanel({
   onFlipModeChange,
   onConfirm,
   onCancel,
-  onAutoDetect,
-  autoDetecting,
   onDeleteSelected,
   hasSelection,
 }: MultiConfigPanelProps) {
@@ -76,24 +72,6 @@ export function MultiConfigPanel({
             ↵
           </kbd>
         </Button>
-        {onAutoDetect && (
-          <Button
-            variant="secondary"
-            onClick={onAutoDetect}
-            disabled={autoDetecting}
-          >
-            {autoDetecting ? (
-              "Erkennung..."
-            ) : (
-              <>
-                Auto-Erkennung
-                <kbd className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/50 bg-muted/50 px-1 text-[10px] font-mono text-muted-foreground">
-                  A
-                </kbd>
-              </>
-            )}
-          </Button>
-        )}
         <Button
           variant="secondary"
           onClick={onDeleteSelected}
@@ -107,7 +85,7 @@ export function MultiConfigPanel({
         <Button variant="ghost" onClick={onCancel}>
           Neu aufnehmen
           <kbd className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/50 bg-muted/50 px-1 text-[10px] font-mono text-muted-foreground">
-            Esc
+            ^
           </kbd>
         </Button>
       </div>

@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { rotateImage90 } from "@/lib/crop-preview";
+import { toast } from "sonner";
 
 interface ServiceStatus {
   name: string;
@@ -119,6 +121,9 @@ export default function SettingsPage() {
         })}
       </div>
 
+      {/* Camera Setup */}
+      <CameraSetup />
+
       {/* Configuration reference */}
       <Card className="mt-6">
         <CardHeader>
@@ -147,6 +152,131 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function CameraSetup() {
+  const [capturing, setCapturing] = useState(false);
+  const [rotating, setRotating] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewWidth, setPreviewWidth] = useState(0);
+  const [previewHeight, setPreviewHeight] = useState(0);
+  const [rotation, setRotation] = useState(0);
+  const [savedRotation, setSavedRotation] = useState(0);
+
+  useEffect(() => {
+    const stored = parseInt(localStorage.getItem("camera-rotation") || "0");
+    setSavedRotation(stored);
+  }, []);
+
+  const handleCapture = useCallback(async () => {
+    setCapturing(true);
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Aufnahme fehlgeschlagen");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+
+      const img = new window.Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Bild konnte nicht geladen werden"));
+        img.src = url;
+      });
+
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(url);
+      setPreviewWidth(img.naturalWidth);
+      setPreviewHeight(img.naturalHeight);
+      setRotation(0);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Aufnahme fehlgeschlagen");
+    } finally {
+      setCapturing(false);
+    }
+  }, [previewUrl]);
+
+  const handleRotate = useCallback(async () => {
+    if (!previewUrl || rotating) return;
+    setRotating(true);
+    try {
+      const result = await rotateImage90(previewUrl, previewWidth, previewHeight);
+      URL.revokeObjectURL(previewUrl);
+      setPreviewUrl(result.url);
+      setPreviewWidth(result.width);
+      setPreviewHeight(result.height);
+      setRotation((prev) => (prev + 90) % 360);
+    } catch {
+      toast.error("Rotation fehlgeschlagen");
+    } finally {
+      setRotating(false);
+    }
+  }, [previewUrl, previewWidth, previewHeight, rotating]);
+
+  const handleSave = useCallback(() => {
+    localStorage.setItem("camera-rotation", rotation.toString());
+    setSavedRotation(rotation);
+    toast.success(`Rotation ${rotation}° gespeichert`);
+  }, [rotation]);
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle className="flex items-center justify-between">
+          Kamera-Setup
+          {savedRotation > 0 && (
+            <span className="text-sm font-normal text-muted-foreground">
+              Aktuelle Rotation: {savedRotation}°
+            </span>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Nimm ein Testfoto auf und drehe es, bis die Ausrichtung stimmt. Die
+          Rotation wird auf alle zukünftigen Aufnahmen angewendet.
+        </p>
+
+        <Button
+          variant="outline"
+          onClick={handleCapture}
+          disabled={capturing}
+        >
+          {capturing ? "Aufnahme..." : "Testfoto aufnehmen"}
+        </Button>
+
+        {previewUrl && (
+          <div className="space-y-3">
+            <div className="flex justify-center rounded-lg border bg-muted/30 p-2">
+              <img
+                src={previewUrl}
+                alt="Kamera-Vorschau"
+                className="max-h-[50vh] w-auto rounded object-contain"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="secondary"
+                onClick={handleRotate}
+                disabled={rotating}
+              >
+                {rotating ? "Drehe..." : "Drehen ↻"}
+              </Button>
+              <span className="text-sm text-muted-foreground">
+                {rotation}°
+              </span>
+              <Button
+                onClick={handleSave}
+                disabled={rotation === savedRotation}
+              >
+                Speichern
+              </Button>
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

@@ -40,7 +40,7 @@ export async function generateThumbnail(
 }
 
 export async function flipHorizontal(imageBuffer: Buffer): Promise<Buffer> {
-  return sharp(imageBuffer).flop().toBuffer();
+  return sharp(imageBuffer).rotate().flop().toBuffer();
 }
 
 export async function getImageMetadata(imageBuffer: Buffer) {

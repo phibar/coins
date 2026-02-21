@@ -1,7 +1,7 @@
 "use client";
 
 import { useForm } from "react-hook-form";
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -20,7 +20,7 @@ import { NumistaSearchDialog } from "./numista-search-dialog";
 import { NumistaImageSearchDialog } from "./numista-image-search-dialog";
 import { ZoomablePreview } from "./zoomable-preview";
 import { PhotoCanvas } from "./photo-canvas";
-import { generateCropPreviewUrl } from "@/lib/crop-preview";
+import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
 import { toast } from "sonner";
 
 export interface CollectionWithImages {
@@ -44,7 +44,9 @@ interface CoinFormProps {
   defaults?: Partial<CoinFormData>;
   frontImageUrl?: string;
   backImageUrl?: string;
-  onSave: (data: CoinFormData) => void;
+  onSaveAndContinue: (data: CoinFormData) => void;
+  onSaveAndNew: (data: CoinFormData) => void;
+  onSaveAndExit: (data: CoinFormData) => void;
   onSkip?: () => void;
   coinIndex?: number;
   totalCoins?: number;
@@ -52,13 +54,16 @@ interface CoinFormProps {
   cameraConnected?: boolean;
   collections?: CollectionWithImages[];
   onCollectionsChange?: (collections: CollectionWithImages[]) => void;
+  allCoinsHandled?: boolean;
 }
 
 export function CoinForm({
   defaults,
   frontImageUrl,
   backImageUrl,
-  onSave,
+  onSaveAndContinue,
+  onSaveAndNew,
+  onSaveAndExit,
   onSkip,
   coinIndex,
   totalCoins,
@@ -66,6 +71,7 @@ export function CoinForm({
   cameraConnected = false,
   collections = [],
   onCollectionsChange,
+  allCoinsHandled,
 }: CoinFormProps) {
   const initialValues = { ...EMPTY_COIN_FORM, ...defaults };
   const { register, handleSubmit, setValue, watch, getValues } =
@@ -79,6 +85,8 @@ export function CoinForm({
   const collectionId = watch("collectionId");
   const hasCase = watch("hasCase");
   const numistaTitle = watch("numistaTitle");
+  const numistaTypeId = watch("numistaTypeId");
+  const addToNumistaCollection = watch("addToNumistaCollection");
 
   const [newCollectionName, setNewCollectionName] = useState("");
   const [creatingCollection, setCreatingCollection] = useState(false);
@@ -123,12 +131,7 @@ export function CoinForm({
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       setColImgDimensions({ width: w, height: h });
-      setColImgCrop({
-        x: w * 0.05,
-        y: h * 0.05,
-        width: w * 0.9,
-        height: h * 0.9,
-      });
+      setColImgCrop(null);
       setColImgRawUrl(url);
     };
     img.src = url;
@@ -150,7 +153,25 @@ export function CoinForm({
       const response = await fetch("/api/camera/capture", { method: "POST" });
       if (!response.ok) throw new Error("Capture failed");
       const blob = await response.blob();
-      loadCollectionImage(URL.createObjectURL(blob));
+      let url = URL.createObjectURL(blob);
+
+      const savedRotation = parseInt(localStorage.getItem("camera-rotation") || "0");
+      if (savedRotation > 0) {
+        const img = new window.Image();
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Image load failed"));
+          img.src = url;
+        });
+        let w = img.naturalWidth, h = img.naturalHeight;
+        for (let i = 0; i < savedRotation / 90; i++) {
+          const result = await rotateImage90(url, w, h);
+          URL.revokeObjectURL(url);
+          url = result.url; w = result.width; h = result.height;
+        }
+      }
+
+      loadCollectionImage(url);
     } catch {
       toast.error("Aufnahme fehlgeschlagen");
     } finally {
@@ -239,12 +260,7 @@ export function CoinForm({
       const w = img.naturalWidth;
       const h = img.naturalHeight;
       setDocDimensions({ width: w, height: h });
-      setDocCrop({
-        x: w * 0.05,
-        y: h * 0.05,
-        width: w * 0.9,
-        height: h * 0.9,
-      });
+      setDocCrop(null);
       setDocRawUrl(url);
     };
     img.src = url;
@@ -256,7 +272,25 @@ export function CoinForm({
       const response = await fetch("/api/camera/capture", { method: "POST" });
       if (!response.ok) throw new Error("Capture failed");
       const blob = await response.blob();
-      loadDocImage(URL.createObjectURL(blob));
+      let url = URL.createObjectURL(blob);
+
+      const savedRotation = parseInt(localStorage.getItem("camera-rotation") || "0");
+      if (savedRotation > 0) {
+        const img = new window.Image();
+        await new Promise<void>((resolve, reject) => {
+          img.onload = () => resolve();
+          img.onerror = () => reject(new Error("Image load failed"));
+          img.src = url;
+        });
+        let w = img.naturalWidth, h = img.naturalHeight;
+        for (let i = 0; i < savedRotation / 90; i++) {
+          const result = await rotateImage90(url, w, h);
+          URL.revokeObjectURL(url);
+          url = result.url; w = result.width; h = result.height;
+        }
+      }
+
+      loadDocImage(url);
     } catch {
       toast.error("Dokument-Aufnahme fehlgeschlagen");
     } finally {
@@ -322,16 +356,85 @@ export function CoinForm({
         setValue(key as keyof CoinFormData, value as never);
       }
     }
+    if (data.numistaTypeId) {
+      setValue("addToNumistaCollection", true);
+    }
   };
 
+  // Save mode: which save button was pressed
+  const saveModeRef = useRef<"continue" | "new" | "exit">("continue");
+
+  const handleFormSubmit = useCallback(
+    (data: CoinFormData) => {
+      if (saveModeRef.current === "new") {
+        onSaveAndNew(data);
+      } else if (saveModeRef.current === "exit") {
+        onSaveAndExit(data);
+      } else {
+        onSaveAndContinue(data);
+      }
+    },
+    [onSaveAndContinue, onSaveAndNew, onSaveAndExit]
+  );
+
+  // Cmd+Enter to save
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        saveModeRef.current = "continue";
+        handleSubmit(handleFormSubmit)();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [handleSubmit, handleFormSubmit]);
+
   return (
-    <form onSubmit={handleSubmit(onSave)} className="space-y-6">
-      {/* Header with coin counter */}
-      {totalCoins && totalCoins > 1 && (
-        <div className="text-sm text-muted-foreground">
-          Münze {(coinIndex ?? 0) + 1} von {totalCoins}
+    <form onSubmit={handleSubmit(handleFormSubmit)} className="space-y-6">
+      {/* Save buttons at top right */}
+      <div className="flex items-center justify-between">
+        <div>
+          {totalCoins && totalCoins > 1 && (
+            <span className="text-sm text-muted-foreground">
+              Münze {(coinIndex ?? 0) + 1} von {totalCoins}
+            </span>
+          )}
         </div>
-      )}
+        <div className="flex gap-2">
+          <Button
+            type="submit"
+            size="sm"
+            disabled={saving}
+            onClick={() => { saveModeRef.current = "continue"; }}
+          >
+            {saving ? "..." : "Speichern & Weiter"}
+          </Button>
+          <Button
+            type="submit"
+            variant="outline"
+            size="sm"
+            disabled={saving || (totalCoins != null && totalCoins > 1 && !allCoinsHandled)}
+            onClick={() => { saveModeRef.current = "new"; }}
+          >
+            Speichern &amp; Neu
+          </Button>
+          <Button
+            type="submit"
+            variant="ghost"
+            size="sm"
+            disabled={saving || (totalCoins != null && totalCoins > 1 && !allCoinsHandled)}
+            onClick={() => { saveModeRef.current = "exit"; }}
+          >
+            Speichern &amp; Beenden
+          </Button>
+          {onSkip && (
+            <Button type="button" variant="ghost" size="sm" onClick={onSkip}>
+              Überspringen
+            </Button>
+          )}
+        </div>
+      </div>
 
       {/* Image previews */}
       {(frontImageUrl || backImageUrl) && (
@@ -388,30 +491,47 @@ export function CoinForm({
       </div>
 
       {/* Numista search */}
-      <div className="flex items-center gap-3">
-        <NumistaSearchDialog
-          currentFormData={getValues()}
-          onSelect={handleNumistaSelect}
-        >
-          <Button type="button" variant="outline" size="sm">
-            Numista-Suche
-          </Button>
-        </NumistaSearchDialog>
-        {frontImageUrl && (
-          <NumistaImageSearchDialog
-            frontImageUrl={frontImageUrl}
-            backImageUrl={backImageUrl}
+      <div className="space-y-2">
+        <div className="flex items-center gap-3">
+          <NumistaSearchDialog
+            currentFormData={getValues()}
             onSelect={handleNumistaSelect}
+            autoOpen
           >
             <Button type="button" variant="outline" size="sm">
-              Bilderkennung
+              Numista-Suche
             </Button>
-          </NumistaImageSearchDialog>
-        )}
-        {numistaTitle && (
-          <span className="text-sm text-muted-foreground truncate">
-            {numistaTitle}
-          </span>
+          </NumistaSearchDialog>
+          {frontImageUrl && (
+            <NumistaImageSearchDialog
+              frontImageUrl={frontImageUrl}
+              backImageUrl={backImageUrl}
+              onSelect={handleNumistaSelect}
+            >
+              <Button type="button" variant="outline" size="sm">
+                Bilderkennung
+              </Button>
+            </NumistaImageSearchDialog>
+          )}
+          {numistaTitle && (
+            <span className="text-sm text-muted-foreground truncate">
+              {numistaTitle}
+            </span>
+          )}
+        </div>
+        {numistaTypeId && (
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="addToNumistaCollection"
+              checked={addToNumistaCollection}
+              onCheckedChange={(checked) =>
+                setValue("addToNumistaCollection", checked === true)
+              }
+            />
+            <Label htmlFor="addToNumistaCollection" className="text-sm">
+              Auch zu Numista-Sammlung hinzufügen
+            </Label>
+          </div>
         )}
       </div>
 
@@ -604,9 +724,9 @@ export function CoinForm({
         )}
 
         {/* State: cropping raw document photo */}
-        {docRawUrl && docDimensions && docCrop && (
+        {docRawUrl && docDimensions && (
           <div className="space-y-3 rounded-lg border border-dashed p-3">
-            <Label>Dokument zuschneiden</Label>
+            <Label>{docCrop ? "Dokument zuschneiden" : "Zeichne einen Ausschnitt"}</Label>
             <PhotoCanvas
               imageSrc={docRawUrl}
               imageWidth={docDimensions.width}
@@ -614,13 +734,13 @@ export function CoinForm({
               crop={docCrop}
               onCropChange={setDocCrop}
               maxDisplayHeight={400}
-              freeAspect
             />
             <div className="flex gap-2">
               <Button
                 type="button"
                 size="sm"
                 onClick={handleDocCropConfirm}
+                disabled={!docCrop}
               >
                 Bestätigen
               </Button>
@@ -738,9 +858,9 @@ export function CoinForm({
                 />
 
                 {/* Crop canvas for collection image */}
-                {colImgRawUrl && colImgDimensions && colImgCrop ? (
+                {colImgRawUrl && colImgDimensions ? (
                   <div className="space-y-3 rounded-lg border border-dashed p-3">
-                    <Label>Sammlungs-Bild zuschneiden</Label>
+                    <Label>{colImgCrop ? "Sammlungs-Bild zuschneiden" : "Zeichne einen Ausschnitt"}</Label>
                     <PhotoCanvas
                       imageSrc={colImgRawUrl}
                       imageWidth={colImgDimensions.width}
@@ -748,14 +868,13 @@ export function CoinForm({
                       crop={colImgCrop}
                       onCropChange={setColImgCrop}
                       maxDisplayHeight={400}
-                      freeAspect
                     />
                     <div className="flex gap-2">
                       <Button
                         type="button"
                         size="sm"
                         onClick={handleCollectionImageCropConfirm}
-                        disabled={uploadingCollectionImage}
+                        disabled={uploadingCollectionImage || !colImgCrop}
                       >
                         {uploadingCollectionImage ? "Hochladen..." : "Bestätigen"}
                       </Button>
@@ -852,17 +971,6 @@ export function CoinForm({
         </div>
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-3">
-        <Button type="submit" disabled={saving}>
-          {saving ? "Speichere..." : "Speichern"}
-        </Button>
-        {onSkip && (
-          <Button type="button" variant="outline" onClick={onSkip}>
-            Überspringen
-          </Button>
-        )}
-      </div>
     </form>
   );
 }

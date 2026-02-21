@@ -150,7 +150,7 @@ export function ZoomablePreview({ src, alt, label }: ZoomablePreviewProps) {
       </div>
       <div
         ref={containerRef}
-        className="aspect-square overflow-hidden rounded-lg border bg-muted/30 cursor-grab active:cursor-grabbing touch-none"
+        className="aspect-square max-h-[60vh] overflow-hidden rounded-lg border bg-muted/30 cursor-grab active:cursor-grabbing touch-none"
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}

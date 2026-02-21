@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -70,12 +70,14 @@ interface NumistaSearchDialogProps {
   currentFormData?: Partial<CoinFormData>;
   onSelect: (data: Partial<CoinFormData>) => void;
   children: React.ReactNode;
+  autoOpen?: boolean;
 }
 
 export function NumistaSearchDialog({
   currentFormData,
   onSelect,
   children,
+  autoOpen = false,
 }: NumistaSearchDialogProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -86,7 +88,28 @@ export function NumistaSearchDialog({
   const [selectedDetail, setSelectedDetail] =
     useState<NumistaDetailResponse | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [selectedIndex, setSelectedIndex] = useState(-1);
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const resultsRef = useRef<HTMLDivElement>(null);
+  const manuallyClosedRef = useRef(false);
+
+  // Auto-open on mount
+  useEffect(() => {
+    if (autoOpen && !manuallyClosedRef.current) {
+      setOpen(true);
+      // Initialize fields from form data
+      if (currentFormData) {
+        if (currentFormData.denomination) setQuery(currentFormData.denomination);
+        if (currentFormData.country) {
+          const entry = ISSUER_OPTIONS.find(
+            (o) => o.label.toLowerCase() === currentFormData.country!.toLowerCase()
+          );
+          setIssuer(entry?.value || "");
+        }
+        if (currentFormData.year) setYear(String(currentFormData.year));
+      }
+    }
+  }, [autoOpen]); // Only on mount, not on currentFormData changes
 
   // Initialize search fields from current form data when dialog opens
   const handleOpenChange = useCallback(
@@ -95,7 +118,6 @@ export function NumistaSearchDialog({
       if (isOpen && currentFormData) {
         if (currentFormData.denomination) setQuery(currentFormData.denomination);
         if (currentFormData.country) {
-          // Find matching issuer code from country name
           const entry = ISSUER_OPTIONS.find(
             (o) => o.label.toLowerCase() === currentFormData.country!.toLowerCase()
           );
@@ -104,8 +126,10 @@ export function NumistaSearchDialog({
         if (currentFormData.year) setYear(String(currentFormData.year));
       }
       if (!isOpen) {
+        manuallyClosedRef.current = true;
         setResults([]);
         setSelectedDetail(null);
+        setSelectedIndex(-1);
       }
     },
     [currentFormData]
@@ -119,6 +143,7 @@ export function NumistaSearchDialog({
       }
 
       setLoading(true);
+      setSelectedIndex(-1);
       try {
         const params = new URLSearchParams({ q });
         if (iss) params.set("issuer", iss);
@@ -164,131 +189,177 @@ export function NumistaSearchDialog({
     }
   }, []);
 
-  const handleConfirmSelection = useCallback(() => {
-    if (!selectedDetail) return;
-
+  const buildFormData = useCallback((detail: NumistaDetailResponse): Partial<CoinFormData> => {
     const data: Partial<CoinFormData> = {
-      numistaTypeId: selectedDetail.id,
-      numistaTitle: selectedDetail.title,
-      numistaUrl: selectedDetail.url || "",
+      numistaTypeId: detail.id,
+      numistaTitle: detail.title,
+      numistaUrl: detail.url || "",
     };
 
-    // Country from issuer
     const country =
-      ISSUER_TO_COUNTRY[selectedDetail.issuer.code] ||
-      selectedDetail.issuer.name;
+      ISSUER_TO_COUNTRY[detail.issuer.code] || detail.issuer.name;
     if (country) data.country = country;
 
-    // Denomination: prefer value.text, fallback to title
-    data.denomination =
-      selectedDetail.value?.text || selectedDetail.title;
+    data.denomination = detail.value?.text || detail.title;
 
-    // Year if specific (min === max)
-    if (
-      selectedDetail.min_year &&
-      selectedDetail.min_year === selectedDetail.max_year
-    ) {
-      data.year = selectedDetail.min_year;
+    if (detail.min_year && detail.min_year === detail.max_year) {
+      data.year = detail.min_year;
     }
 
-    // Physical properties
-    if (selectedDetail.weight) data.weight = String(selectedDetail.weight);
-    if (selectedDetail.size) data.diameter = String(selectedDetail.size);
-    if (selectedDetail.thickness) data.thickness = String(selectedDetail.thickness);
-    if (selectedDetail.composition?.text)
-      data.material = selectedDetail.composition.text;
+    if (detail.weight) data.weight = String(detail.weight);
+    if (detail.size) data.diameter = String(detail.size);
+    if (detail.thickness) data.thickness = String(detail.thickness);
+    if (detail.composition?.text) data.material = detail.composition.text;
 
-    // Edge
-    const edgeParts = [
-      selectedDetail.edge?.description,
-      selectedDetail.edge?.lettering,
-    ].filter(Boolean);
+    const edgeParts = [detail.edge?.description, detail.edge?.lettering].filter(Boolean);
     if (edgeParts.length > 0) data.edgeType = edgeParts.join(" - ");
 
-    // Tags
-    if (selectedDetail.tags?.length) data.tags = selectedDetail.tags;
+    if (detail.tags?.length) data.tags = detail.tags;
 
-    // Scalar Numista fields
-    if (selectedDetail.shape) data.shape = selectedDetail.shape;
-    if (selectedDetail.orientation) data.orientation = selectedDetail.orientation;
-    if (selectedDetail.technique?.text) data.technique = selectedDetail.technique.text;
-    if (selectedDetail.series) data.series = selectedDetail.series;
-    if (selectedDetail.commemorated_topic)
-      data.commemoratedTopic = selectedDetail.commemorated_topic;
-    if (selectedDetail.demonetization?.is_demonetized) {
+    if (detail.shape) data.shape = detail.shape;
+    if (detail.orientation) data.orientation = detail.orientation;
+    if (detail.technique?.text) data.technique = detail.technique.text;
+    if (detail.series) data.series = detail.series;
+    if (detail.commemorated_topic) data.commemoratedTopic = detail.commemorated_topic;
+    if (detail.demonetization?.is_demonetized) {
       data.isDemonetized = true;
-      data.demonetizationDate =
-        selectedDetail.demonetization.demonetization_date || "";
+      data.demonetizationDate = detail.demonetization.demonetization_date || "";
     }
-    if (selectedDetail.comments) {
-      data.comments = selectedDetail.comments.replace(/<[^>]*>/g, "");
+    if (detail.comments) {
+      data.comments = detail.comments.replace(/<[^>]*>/g, "");
     }
 
-    // Numista reference images
-    if (selectedDetail.obverse?.thumbnail)
-      data.numistaObverseThumbnail = selectedDetail.obverse.thumbnail;
-    if (selectedDetail.reverse?.thumbnail)
-      data.numistaReverseThumbnail = selectedDetail.reverse.thumbnail;
+    if (detail.obverse?.thumbnail) data.numistaObverseThumbnail = detail.obverse.thumbnail;
+    if (detail.reverse?.thumbnail) data.numistaReverseThumbnail = detail.reverse.thumbnail;
 
-    // Structured Json fields
-    if (selectedDetail.obverse) {
+    if (detail.obverse) {
       data.numistaObverse = {
-        description: selectedDetail.obverse.description,
-        lettering: selectedDetail.obverse.lettering,
-        engravers: selectedDetail.obverse.engravers,
+        description: detail.obverse.description,
+        lettering: detail.obverse.lettering,
+        engravers: detail.obverse.engravers,
       };
     }
-    if (selectedDetail.reverse) {
+    if (detail.reverse) {
       data.numistaReverse = {
-        description: selectedDetail.reverse.description,
-        lettering: selectedDetail.reverse.lettering,
-        engravers: selectedDetail.reverse.engravers,
+        description: detail.reverse.description,
+        lettering: detail.reverse.lettering,
+        engravers: detail.reverse.engravers,
       };
     }
-    if (selectedDetail.references?.length)
-      data.numistaReferences = selectedDetail.references;
-    if (selectedDetail.mints?.length)
-      data.numistaMints = selectedDetail.mints;
-    if (selectedDetail.ruler?.length)
-      data.numistaRuler = selectedDetail.ruler;
-    if (selectedDetail.related_types?.length)
-      data.numistaRelatedTypes = selectedDetail.related_types;
+    if (detail.references?.length) data.numistaReferences = detail.references;
+    if (detail.mints?.length) data.numistaMints = detail.mints;
+    if (detail.ruler?.length) data.numistaRuler = detail.ruler;
+    if (detail.related_types?.length) data.numistaRelatedTypes = detail.related_types;
 
-    // Issues + mintage
-    if (selectedDetail.issues?.length) {
-      data.numistaIssues = selectedDetail.issues;
-      const firstIssue = selectedDetail.issues[0];
+    if (detail.issues?.length) {
+      data.numistaIssues = detail.issues;
+      const firstIssue = detail.issues[0];
       if (firstIssue.mintage) data.mintage = String(firstIssue.mintage);
     }
 
-    // Prices + estimated value + condition
-    if (selectedDetail.prices?.prices?.length) {
-      data.numistaPrices = selectedDetail.prices;
-      data.estimatedCurrency = selectedDetail.prices.currency;
+    if (detail.prices?.prices?.length) {
+      data.numistaPrices = detail.prices;
+      data.estimatedCurrency = detail.prices.currency;
 
-      // Set condition to the lowest grade from prices
       const gradeOrder = ["G", "VG", "F", "VF", "XF", "AU", "UNC"];
-      const lowestGrade = selectedDetail.prices.prices
+      const lowestGrade = detail.prices.prices
         .map((p) => p.grade)
         .sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b))[0];
       if (lowestGrade) {
         data.condition = lowestGrade;
-        // Use the lowest grade's price as estimated value
-        const lowestPrice = selectedDetail.prices.prices.find(
-          (p) => p.grade === lowestGrade
-        );
+        const lowestPrice = detail.prices.prices.find((p) => p.grade === lowestGrade);
         data.estimatedValue =
-          lowestPrice?.price != null
-            ? Math.round(lowestPrice.price * 100) / 100
-            : null;
+          lowestPrice?.price != null ? Math.round(lowestPrice.price * 100) / 100 : null;
       }
     }
 
-    // notes is NOT populated with Numista data anymore — reserved for user notes only
+    return data;
+  }, []);
 
-    onSelect(data);
+  const handleConfirmSelection = useCallback(() => {
+    if (!selectedDetail) return;
+    onSelect(buildFormData(selectedDetail));
     setOpen(false);
-  }, [selectedDetail, onSelect]);
+  }, [selectedDetail, onSelect, buildFormData]);
+
+  // Quick-select: fetch detail + take data in one go (Cmd+Enter on result)
+  const handleQuickSelect = useCallback(async (typeId: number) => {
+    setDetailLoading(true);
+    try {
+      const response = await fetch(`/api/numista/type/${typeId}`);
+      if (!response.ok) throw new Error("Detail fetch failed");
+      const detail: NumistaDetailResponse = await response.json();
+      onSelect(buildFormData(detail));
+      setOpen(false);
+    } catch {
+      // Fall back to showing detail view
+    } finally {
+      setDetailLoading(false);
+    }
+  }, [onSelect, buildFormData]);
+
+  // Keyboard navigation in results
+  useEffect(() => {
+    if (!open) return;
+
+    const handler = (e: KeyboardEvent) => {
+      // In detail view
+      if (selectedDetail && !detailLoading) {
+        if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
+          e.preventDefault();
+          handleConfirmSelection();
+        } else if (e.key === "^" || e.key === "Dead") {
+          e.preventDefault();
+          setSelectedDetail(null);
+        }
+        return;
+      }
+
+      // In results list (not in input)
+      if (results.length > 0 && !loading && !selectedDetail) {
+        const tag = (e.target as HTMLElement)?.tagName;
+        // Allow typing in inputs, but still handle arrows
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
+        } else if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedIndex((prev) => Math.max(prev - 1, -1));
+        } else if (e.key === "Enter" && selectedIndex >= 0) {
+          if (tag === "INPUT") {
+            // Enter in input with selection → open details
+            e.preventDefault();
+            if (e.metaKey || e.ctrlKey) {
+              handleQuickSelect(results[selectedIndex].id);
+            } else {
+              handleSelectType(results[selectedIndex].id);
+            }
+          } else {
+            e.preventDefault();
+            if (e.metaKey || e.ctrlKey) {
+              handleQuickSelect(results[selectedIndex].id);
+            } else {
+              handleSelectType(results[selectedIndex].id);
+            }
+          }
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    open, results, selectedIndex, selectedDetail, detailLoading, loading,
+    handleSelectType, handleQuickSelect, handleConfirmSelection,
+  ]);
+
+  // Scroll selected result into view
+  useEffect(() => {
+    if (selectedIndex >= 0 && resultsRef.current) {
+      const el = resultsRef.current.children[selectedIndex] as HTMLElement;
+      el?.scrollIntoView({ block: "nearest" });
+    }
+  }, [selectedIndex]);
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -308,7 +379,7 @@ export function NumistaSearchDialog({
                 handleSearchChange(e.target.value, issuer, year)
               }
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" && selectedIndex < 0) {
                   e.preventDefault();
                   performSearch(query, issuer, year);
                 }
@@ -357,7 +428,7 @@ export function NumistaSearchDialog({
                 placeholder="1970"
                 className="w-24"
                 onKeyDown={(e) => {
-                  if (e.key === "Enter") {
+                  if (e.key === "Enter" && selectedIndex < 0) {
                     e.preventDefault();
                     performSearch(query, issuer, year);
                   }
@@ -391,12 +462,16 @@ export function NumistaSearchDialog({
           )}
 
           {!loading && results.length > 0 && !selectedDetail && (
-            <div className="space-y-1">
-              {results.map((type) => (
+            <div className="space-y-1" ref={resultsRef}>
+              {results.map((type, idx) => (
                 <button
                   key={type.id}
                   onClick={() => handleSelectType(type.id)}
-                  className="flex w-full items-center gap-3 rounded-lg border p-3 text-left hover:bg-accent transition-colors"
+                  className={`flex w-full items-center gap-3 rounded-lg border p-3 text-left transition-colors ${
+                    idx === selectedIndex
+                      ? "bg-accent border-primary"
+                      : "hover:bg-accent"
+                  }`}
                 >
                   {type.obverse_thumbnail && (
                     <img
@@ -417,6 +492,11 @@ export function NumistaSearchDialog({
                   </div>
                 </button>
               ))}
+              {selectedIndex >= 0 && (
+                <p className="text-xs text-muted-foreground text-center mt-2">
+                  ↵ Details &middot; ⌘↵ Direkt übernehmen
+                </p>
+              )}
             </div>
           )}
 
@@ -434,7 +514,7 @@ export function NumistaSearchDialog({
                 onClick={() => setSelectedDetail(null)}
                 className="text-sm text-primary hover:underline"
               >
-                &larr; Zurück zur Suche
+                &larr; Zurück zur Suche <kbd className="ml-1 text-[10px] text-muted-foreground border rounded px-1">^</kbd>
               </button>
 
               <div className="rounded-lg border p-4 space-y-3">
@@ -626,7 +706,7 @@ export function NumistaSearchDialog({
                 </div>
 
                 <Button onClick={handleConfirmSelection} className="w-full">
-                  Daten übernehmen
+                  Daten übernehmen <kbd className="ml-1 text-[10px] opacity-60 border rounded px-1">↵</kbd>
                 </Button>
               </div>
             </div>

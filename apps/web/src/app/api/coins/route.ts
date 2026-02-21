@@ -3,6 +3,7 @@ import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
 import { cropImage, generateThumbnail } from "@/lib/image-processing";
 import { uploadToS3 } from "@/lib/s3";
+import { addToNumistaCollection } from "@/lib/numista";
 import type { CoinCondition } from "@/generated/prisma/client";
 
 export async function POST(request: NextRequest) {
@@ -155,6 +156,43 @@ export async function POST(request: NextRequest) {
             sortOrder: 2 + i,
           },
         });
+      }
+    }
+
+    // Sync to Numista collection (non-blocking)
+    if (formData.addToNumistaCollection && formData.numistaTypeId) {
+      try {
+        // Find matching issue by year + mint letter
+        const issues = formData.numistaIssues as
+          | { id: number; year: number; mint_letter?: string }[]
+          | null;
+        const matchingIssue = issues?.find(
+          (i) =>
+            i.year === formData.year &&
+            (i.mint_letter || "") === (formData.mintMark || "")
+        );
+
+        // Map condition to Numista grade format (lowercase)
+        let grade: string | undefined;
+        if (formData.condition) {
+          grade =
+            formData.condition === "PROOF"
+              ? "unc"
+              : formData.condition.toLowerCase();
+        }
+
+        const result = await addToNumistaCollection({
+          numistaTypeId: formData.numistaTypeId,
+          issueId: matchingIssue?.id,
+          grade,
+        });
+
+        await prisma.coin.update({
+          where: { id: coin.id },
+          data: { numistaCollectedItemId: result.id },
+        });
+      } catch (numistaError) {
+        console.warn("Failed to add to Numista collection:", numistaError);
       }
     }
 

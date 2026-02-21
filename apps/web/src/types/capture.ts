@@ -21,8 +21,7 @@ export type CaptureStep =
   | "numisbrief_back_capture"
   | "numisbrief_back_crop"
   | "coin_entry"
-  | "saving"
-  | "saved";
+  | "saving";
 
 export interface CropRect {
   x: number;
@@ -153,6 +152,9 @@ export interface CoinFormData {
 
   // Collection
   collectionId: string | null;
+
+  // Numista collection sync
+  addToNumistaCollection: boolean;
 }
 
 export const EMPTY_COIN_FORM: CoinFormData = {
@@ -200,6 +202,7 @@ export const EMPTY_COIN_FORM: CoinFormData = {
   numistaRelatedTypes: null,
   documentImagesBase64: [],
   collectionId: null,
+  addToNumistaCollection: false,
 };
 
 export interface CaptureState {
@@ -274,6 +277,9 @@ export type CaptureAction =
   | { type: "RETAKE_NUMISBRIEF_BACK" }
   | { type: "NEXT_COIN" }
   | { type: "PREV_COIN" }
+  | { type: "GO_TO_COIN"; index: number }
+  | { type: "RETAKE_FRONT"; photo: string; width: number; height: number }
+  | { type: "RETAKE_BACK_PHOTO"; photo: string; width: number; height: number }
   | { type: "SAVE_COIN" }
   | { type: "COIN_SAVED" }
   | { type: "SET_SESSION_DEFAULTS"; defaults: Partial<CoinFormData> }

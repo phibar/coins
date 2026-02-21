@@ -2,6 +2,7 @@
 
 import { useReducer, useCallback } from "react";
 import { toast } from "sonner";
+import { rotateImage90 } from "@/lib/crop-preview";
 import type {
   CaptureState,
   CaptureAction,
@@ -122,12 +123,7 @@ function captureReducer(
           ...state,
           step: "single_crop",
           mode: "single",
-          singleCrop: {
-            x: state.imageWidth * 0.25,
-            y: state.imageHeight * 0.25,
-            width: Math.min(state.imageWidth, state.imageHeight) * 0.5,
-            height: Math.min(state.imageWidth, state.imageHeight) * 0.5,
-          },
+          singleCrop: null,
         };
       }
       if (action.mode === "numisbrief") {
@@ -135,12 +131,7 @@ function captureReducer(
           ...state,
           step: "numisbrief_crop",
           mode: "numisbrief",
-          numisbriefCrop: {
-            x: state.imageWidth * 0.1,
-            y: state.imageHeight * 0.1,
-            width: state.imageWidth * 0.8,
-            height: state.imageHeight * 0.8,
-          },
+          numisbriefCrop: null,
         };
       }
       if (action.mode === "multi") {
@@ -204,12 +195,7 @@ function captureReducer(
         backPhoto: action.photo,
         backImageWidth: action.width,
         backImageHeight: action.height,
-        singleBackCrop: {
-          x: action.width * 0.25,
-          y: action.height * 0.25,
-          width: Math.min(action.width, action.height) * 0.5,
-          height: Math.min(action.width, action.height) * 0.5,
-        },
+        singleBackCrop: null,
       };
 
     case "SET_SINGLE_BACK_CROP":
@@ -484,12 +470,7 @@ function captureReducer(
         backPhoto: action.photo,
         backImageWidth: action.width,
         backImageHeight: action.height,
-        numisbriefBackCrop: {
-          x: action.width * 0.1,
-          y: action.height * 0.1,
-          width: action.width * 0.8,
-          height: action.height * 0.8,
-        },
+        numisbriefBackCrop: null,
       };
 
     case "SET_NUMISBRIEF_BACK_CROP":
@@ -521,80 +502,136 @@ function captureReducer(
         numisbriefBackCrop: null,
       };
 
-    case "ROTATE_FRONT":
+    case "RETAKE_FRONT": {
+      // Replace front photo, stay in current step, reset mode-specific crops
+      const retakeState: CaptureState = {
+        ...state,
+        frontPhoto: action.photo,
+        imageWidth: action.width,
+        imageHeight: action.height,
+      };
+      // Reset crops based on current mode/step
+      if (state.step === "single_crop" || state.mode === "single") {
+        retakeState.singleCrop = {
+          x: action.width * 0.25,
+          y: action.height * 0.25,
+          width: Math.min(action.width, action.height) * 0.5,
+          height: Math.min(action.width, action.height) * 0.5,
+        };
+      }
+      if (state.step === "numisbrief_crop" || state.mode === "numisbrief") {
+        retakeState.numisbriefCrop = {
+          x: action.width * 0.1,
+          y: action.height * 0.1,
+          width: action.width * 0.8,
+          height: action.height * 0.8,
+        };
+      }
+      if (state.step === "grid_config" || state.mode === "grid") {
+        retakeState.gridOverlay = {
+          x: action.width * 0.1,
+          y: action.height * 0.1,
+          width: action.width * 0.8,
+          height: action.height * 0.8,
+        };
+      }
+      if (state.step === "multi_crop" || state.mode === "multi") {
+        retakeState.multiCrops = [];
+        retakeState.selectedMultiCropId = null;
+      }
+      return retakeState;
+    }
+
+    case "RETAKE_BACK_PHOTO": {
+      // Replace back photo in back-crop steps
+      const retakeBackState: CaptureState = {
+        ...state,
+        backPhoto: action.photo,
+        backImageWidth: action.width,
+        backImageHeight: action.height,
+      };
+      if (state.mode === "single") {
+        retakeBackState.singleBackCrop = {
+          x: action.width * 0.25,
+          y: action.height * 0.25,
+          width: Math.min(action.width, action.height) * 0.5,
+          height: Math.min(action.width, action.height) * 0.5,
+        };
+      }
+      if (state.mode === "numisbrief") {
+        retakeBackState.numisbriefBackCrop = {
+          x: action.width * 0.1,
+          y: action.height * 0.1,
+          width: action.width * 0.8,
+          height: action.height * 0.8,
+        };
+      }
+      return retakeBackState;
+    }
+
+    case "ROTATE_FRONT": {
+      const oldFrontH = state.imageHeight;
       return {
         ...state,
         frontPhoto: action.photo,
         imageWidth: action.width,
         imageHeight: action.height,
-        // Reset crop to center of rotated image
-        singleCrop: state.singleCrop
-          ? {
-              x: action.width * 0.25,
-              y: action.height * 0.25,
-              width: Math.min(action.width, action.height) * 0.5,
-              height: Math.min(action.width, action.height) * 0.5,
-            }
-          : null,
-        // Reset numisbrief crop for rotated image
-        numisbriefCrop: state.numisbriefCrop
-          ? {
-              x: action.width * 0.1,
-              y: action.height * 0.1,
-              width: action.width * 0.8,
-              height: action.height * 0.8,
-            }
-          : null,
-        // Reset grid overlay for rotated image
+        singleCrop: null,
+        numisbriefCrop: null,
         gridOverlay: state.gridOverlay
           ? {
-              x: action.width * 0.1,
-              y: action.height * 0.1,
-              width: action.width * 0.8,
-              height: action.height * 0.8,
+              x: oldFrontH - state.gridOverlay.y - state.gridOverlay.height,
+              y: state.gridOverlay.x,
+              width: state.gridOverlay.height,
+              height: state.gridOverlay.width,
             }
           : null,
-        // Reset multi crops for rotated image
-        multiCrops: state.mode === "multi" ? [] : state.multiCrops,
-        selectedMultiCropId:
-          state.mode === "multi" ? null : state.selectedMultiCropId,
+        multiCrops:
+          state.mode === "multi"
+            ? state.multiCrops.map((item) => ({
+                id: item.id,
+                crop: {
+                  x: oldFrontH - item.crop.y - item.crop.height,
+                  y: item.crop.x,
+                  width: item.crop.height,
+                  height: item.crop.width,
+                },
+              }))
+            : state.multiCrops,
       };
+    }
 
-    case "ROTATE_BACK":
+    case "ROTATE_BACK": {
+      const oldBackH = state.backImageHeight;
       return {
         ...state,
         backPhoto: action.photo,
         backImageWidth: action.width,
         backImageHeight: action.height,
-        singleBackCrop: state.singleBackCrop
-          ? {
-              x: action.width * 0.25,
-              y: action.height * 0.25,
-              width: Math.min(action.width, action.height) * 0.5,
-              height: Math.min(action.width, action.height) * 0.5,
-            }
-          : null,
-        numisbriefBackCrop: state.numisbriefBackCrop
-          ? {
-              x: action.width * 0.1,
-              y: action.height * 0.1,
-              width: action.width * 0.8,
-              height: action.height * 0.8,
-            }
-          : null,
+        singleBackCrop: null,
+        numisbriefBackCrop: null,
         backGridOverlay: state.backGridOverlay
           ? {
-              x: action.width * 0.1,
-              y: action.height * 0.1,
-              width: action.width * 0.8,
-              height: action.height * 0.8,
+              x: oldBackH - state.backGridOverlay.y - state.backGridOverlay.height,
+              y: state.backGridOverlay.x,
+              width: state.backGridOverlay.height,
+              height: state.backGridOverlay.width,
             }
           : null,
-        // Reset multi back crops for rotated image
-        multiBackCrops: state.mode === "multi" ? [] : state.multiBackCrops,
-        selectedMultiCropId:
-          state.mode === "multi" ? null : state.selectedMultiCropId,
+        multiBackCrops:
+          state.mode === "multi"
+            ? state.multiBackCrops.map((item) => ({
+                id: item.id,
+                crop: {
+                  x: oldBackH - item.crop.y - item.crop.height,
+                  y: item.crop.x,
+                  width: item.crop.height,
+                  height: item.crop.width,
+                },
+              }))
+            : state.multiBackCrops,
       };
+    }
 
     case "SKIP_BACK_CAPTURE":
       return {
@@ -637,6 +674,12 @@ function captureReducer(
       }
       return state;
 
+    case "GO_TO_COIN":
+      if (action.index >= 0 && action.index < state.coins.length) {
+        return { ...state, currentCoinIndex: action.index };
+      }
+      return state;
+
     case "SAVE_COIN":
       return { ...state, step: "saving" };
 
@@ -644,7 +687,8 @@ function captureReducer(
       const isLastCoin =
         state.currentCoinIndex >= state.coins.length - 1;
       if (isLastCoin) {
-        return { ...state, step: "saved" };
+        // No more "saved" step — handled by save modes in page.tsx
+        return state;
       }
       return {
         ...state,
@@ -692,7 +736,7 @@ export function useCaptureSession() {
       const blob = await response.blob();
       console.log("[capture] Blob size:", blob.size, "type:", blob.type);
 
-      const url = URL.createObjectURL(blob);
+      let finalUrl = URL.createObjectURL(blob);
 
       // Get image dimensions
       console.log("[capture] Loading image...");
@@ -706,14 +750,30 @@ export function useCaptureSession() {
           console.error("[capture] Image load error:", e);
           reject(new Error("Bild konnte nicht geladen werden"));
         };
-        img.src = url;
+        img.src = finalUrl;
       });
+
+      let finalWidth = img.naturalWidth;
+      let finalHeight = img.naturalHeight;
+
+      // Apply saved camera rotation
+      const savedRotation = parseInt(localStorage.getItem("camera-rotation") || "0");
+      if (savedRotation > 0) {
+        const rotations = savedRotation / 90;
+        for (let i = 0; i < rotations; i++) {
+          const result = await rotateImage90(finalUrl, finalWidth, finalHeight);
+          URL.revokeObjectURL(finalUrl);
+          finalUrl = result.url;
+          finalWidth = result.width;
+          finalHeight = result.height;
+        }
+      }
 
       dispatch({
         type: "CAPTURE_COMPLETE",
-        photo: url,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+        photo: finalUrl,
+        width: finalWidth,
+        height: finalHeight,
       });
     } catch (error) {
       console.error("[capture] Failed:", error);
@@ -749,20 +809,36 @@ export function useCaptureSession() {
       }
 
       const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      let finalUrl = URL.createObjectURL(blob);
 
       const img = new window.Image();
       await new Promise<void>((resolve, reject) => {
         img.onload = () => resolve();
         img.onerror = () => reject(new Error("Bild konnte nicht geladen werden"));
-        img.src = url;
+        img.src = finalUrl;
       });
+
+      let finalWidth = img.naturalWidth;
+      let finalHeight = img.naturalHeight;
+
+      // Apply saved camera rotation
+      const savedRotation = parseInt(localStorage.getItem("camera-rotation") || "0");
+      if (savedRotation > 0) {
+        const rotations = savedRotation / 90;
+        for (let i = 0; i < rotations; i++) {
+          const result = await rotateImage90(finalUrl, finalWidth, finalHeight);
+          URL.revokeObjectURL(finalUrl);
+          finalUrl = result.url;
+          finalWidth = result.width;
+          finalHeight = result.height;
+        }
+      }
 
       dispatch({
         type: "SINGLE_BACK_COMPLETE",
-        photo: url,
-        width: img.naturalWidth,
-        height: img.naturalHeight,
+        photo: finalUrl,
+        width: finalWidth,
+        height: finalHeight,
       });
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);

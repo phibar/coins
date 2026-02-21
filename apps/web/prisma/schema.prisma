@@ -73,6 +73,9 @@ model Coin {
   numistaObverseThumbnail String? @map("numista_obverse_thumbnail")
   numistaReverseThumbnail String? @map("numista_reverse_thumbnail")
 
+  // Numista collection sync
+  numistaCollectedItemId Int? @map("numista_collected_item_id")
+
   // Numista complex data (Json = PostgreSQL jsonb)
   numistaObverse      Json? @map("numista_obverse")       // {description, lettering, engravers}
   numistaReverse      Json? @map("numista_reverse")       // {description, lettering, engravers}
