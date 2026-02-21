@@ -1,6 +1,7 @@
 "use client";
 
 import { useForm } from "react-hook-form";
+import { useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,11 +14,20 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import type { CoinFormData } from "@/types/capture";
+import type { CoinFormData, CropRect } from "@/types/capture";
 import { EMPTY_COIN_FORM } from "@/types/capture";
 import { NumistaSearchDialog } from "./numista-search-dialog";
 import { NumistaImageSearchDialog } from "./numista-image-search-dialog";
 import { ZoomablePreview } from "./zoomable-preview";
+import { PhotoCanvas } from "./photo-canvas";
+import { generateCropPreviewUrl } from "@/lib/crop-preview";
+import { toast } from "sonner";
+
+export interface CollectionWithImages {
+  id: string;
+  name: string;
+  images: { id: string; thumbnailUrl: string; url: string }[];
+}
 
 const CONDITION_OPTIONS = [
   { value: "G", label: "G - Good" },
@@ -39,6 +49,9 @@ interface CoinFormProps {
   coinIndex?: number;
   totalCoins?: number;
   saving?: boolean;
+  cameraConnected?: boolean;
+  collections?: CollectionWithImages[];
+  onCollectionsChange?: (collections: CollectionWithImages[]) => void;
 }
 
 export function CoinForm({
@@ -50,6 +63,9 @@ export function CoinForm({
   coinIndex,
   totalCoins,
   saving,
+  cameraConnected = false,
+  collections = [],
+  onCollectionsChange,
 }: CoinFormProps) {
   const initialValues = { ...EMPTY_COIN_FORM, ...defaults };
   const { register, handleSubmit, setValue, watch, getValues } =
@@ -60,9 +76,245 @@ export function CoinForm({
   const condition = watch("condition");
   const isProof = watch("isProof");
   const isFirstDay = watch("isFirstDay");
+  const collectionId = watch("collectionId");
   const hasCase = watch("hasCase");
-  const hasCertificate = watch("hasCertificate");
   const numistaTitle = watch("numistaTitle");
+
+  const [newCollectionName, setNewCollectionName] = useState("");
+  const [creatingCollection, setCreatingCollection] = useState(false);
+
+  const handleCreateCollection = useCallback(async () => {
+    const name = newCollectionName.trim();
+    if (!name) return;
+    setCreatingCollection(true);
+    try {
+      const res = await fetch("/api/collections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      if (!res.ok) {
+        const data = await res.json();
+        toast.error(data.error || "Fehler beim Anlegen");
+        return;
+      }
+      const created = await res.json();
+      toast.success("Sammlung angelegt");
+      setNewCollectionName("");
+      setValue("collectionId", created.id);
+      onCollectionsChange?.([...collections, { id: created.id, name: created.name, images: [] }]);
+    } catch {
+      toast.error("Fehler beim Anlegen");
+    } finally {
+      setCreatingCollection(false);
+    }
+  }, [newCollectionName, collections, onCollectionsChange, setValue]);
+
+  const collectionImageInputRef = useRef<HTMLInputElement>(null);
+  const [uploadingCollectionImage, setUploadingCollectionImage] = useState(false);
+  const [colImgRawUrl, setColImgRawUrl] = useState<string | null>(null);
+  const [colImgDimensions, setColImgDimensions] = useState<{ width: number; height: number } | null>(null);
+  const [colImgCrop, setColImgCrop] = useState<CropRect | null>(null);
+  const [colImgCapturing, setColImgCapturing] = useState(false);
+
+  const loadCollectionImage = useCallback((url: string) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      setColImgDimensions({ width: w, height: h });
+      setColImgCrop({
+        x: w * 0.05,
+        y: h * 0.05,
+        width: w * 0.9,
+        height: h * 0.9,
+      });
+      setColImgRawUrl(url);
+    };
+    img.src = url;
+  }, []);
+
+  const handleCollectionImageFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      e.target.value = "";
+      loadCollectionImage(URL.createObjectURL(file));
+    },
+    [loadCollectionImage]
+  );
+
+  const handleCollectionImageCapture = useCallback(async () => {
+    setColImgCapturing(true);
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Capture failed");
+      const blob = await response.blob();
+      loadCollectionImage(URL.createObjectURL(blob));
+    } catch {
+      toast.error("Aufnahme fehlgeschlagen");
+    } finally {
+      setColImgCapturing(false);
+    }
+  }, [loadCollectionImage]);
+
+  const handleCollectionImageCropConfirm = useCallback(async () => {
+    if (!colImgRawUrl || !colImgCrop || !collectionId) return;
+    setUploadingCollectionImage(true);
+    try {
+      const previewUrl = await generateCropPreviewUrl(colImgRawUrl, colImgCrop);
+      const response = await fetch(previewUrl);
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          ""
+        )
+      );
+
+      const res = await fetch(`/api/collections/${collectionId}/images`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imagesBase64: [base64] }),
+      });
+      if (!res.ok) throw new Error("Upload failed");
+      const created = await res.json();
+
+      const updated = collections.map((c) =>
+        c.id === collectionId
+          ? { ...c, images: [...c.images, ...created] }
+          : c
+      );
+      onCollectionsChange?.(updated);
+      toast.success("Bild hinzugefügt");
+
+      setColImgRawUrl(null);
+      setColImgDimensions(null);
+      setColImgCrop(null);
+    } catch {
+      toast.error("Fehler beim Hochladen");
+    } finally {
+      setUploadingCollectionImage(false);
+    }
+  }, [colImgRawUrl, colImgCrop, collectionId, collections, onCollectionsChange]);
+
+  const handleCollectionImageCropCancel = useCallback(() => {
+    setColImgRawUrl(null);
+    setColImgDimensions(null);
+    setColImgCrop(null);
+  }, []);
+
+  const handleDeleteCollectionImage = useCallback(async (imageId: string) => {
+    if (!collectionId) return;
+    try {
+      const res = await fetch(`/api/collections/${collectionId}/images/${imageId}`, { method: "DELETE" });
+      if (!res.ok) throw new Error("Delete failed");
+
+      const updated = collections.map((c) =>
+        c.id === collectionId
+          ? { ...c, images: c.images.filter((img) => img.id !== imageId) }
+          : c
+      );
+      onCollectionsChange?.(updated);
+      toast.success("Bild gelöscht");
+    } catch {
+      toast.error("Fehler beim Löschen");
+    }
+  }, [collectionId, collections, onCollectionsChange]);
+
+  const docInputRef = useRef<HTMLInputElement>(null);
+  const [documents, setDocuments] = useState<{ preview: string; base64: string }[]>([]);
+  const [docRawUrl, setDocRawUrl] = useState<string | null>(null);
+  const [docDimensions, setDocDimensions] = useState<{
+    width: number;
+    height: number;
+  } | null>(null);
+  const [docCrop, setDocCrop] = useState<CropRect | null>(null);
+  const [docCapturing, setDocCapturing] = useState(false);
+
+  const loadDocImage = useCallback((url: string) => {
+    const img = new window.Image();
+    img.onload = () => {
+      const w = img.naturalWidth;
+      const h = img.naturalHeight;
+      setDocDimensions({ width: w, height: h });
+      setDocCrop({
+        x: w * 0.05,
+        y: h * 0.05,
+        width: w * 0.9,
+        height: h * 0.9,
+      });
+      setDocRawUrl(url);
+    };
+    img.src = url;
+  }, []);
+
+  const handleDocCapture = useCallback(async () => {
+    setDocCapturing(true);
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Capture failed");
+      const blob = await response.blob();
+      loadDocImage(URL.createObjectURL(blob));
+    } catch {
+      toast.error("Dokument-Aufnahme fehlgeschlagen");
+    } finally {
+      setDocCapturing(false);
+    }
+  }, [loadDocImage]);
+
+  const handleDocFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      loadDocImage(URL.createObjectURL(file));
+    },
+    [loadDocImage]
+  );
+
+  const handleDocCropConfirm = useCallback(async () => {
+    if (!docRawUrl || !docCrop) return;
+    try {
+      const previewUrl = await generateCropPreviewUrl(docRawUrl, docCrop);
+      // Extract base64 from the preview blob
+      const response = await fetch(previewUrl);
+      const blob = await response.blob();
+      const arrayBuffer = await blob.arrayBuffer();
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce(
+          (data, byte) => data + String.fromCharCode(byte),
+          ""
+        )
+      );
+      const newDocs = [...documents, { preview: previewUrl, base64 }];
+      setDocuments(newDocs);
+      setValue("documentImagesBase64", newDocs.map((d) => d.base64));
+      setValue("hasCertificate", true);
+      // Clear raw state
+      setDocRawUrl(null);
+      setDocDimensions(null);
+      setDocCrop(null);
+    } catch {
+      toast.error("Dokument-Crop fehlgeschlagen");
+    }
+  }, [docRawUrl, docCrop, documents, setValue]);
+
+  const handleDocRemove = useCallback((index: number) => {
+    setDocuments((prev) => {
+      URL.revokeObjectURL(prev[index].preview);
+      const next = prev.filter((_, i) => i !== index);
+      setValue("documentImagesBase64", next.map((d) => d.base64));
+      if (next.length === 0) setValue("hasCertificate", false);
+      return next;
+    });
+  }, [setValue]);
+
+  const handleDocCropCancel = useCallback(() => {
+    setDocRawUrl(null);
+    setDocDimensions(null);
+    setDocCrop(null);
+  }, []);
 
   const handleNumistaSelect = (data: Partial<CoinFormData>) => {
     for (const [key, value] of Object.entries(data)) {
@@ -260,7 +512,10 @@ export function CoinForm({
             <Label>Erhaltung</Label>
             <Select
               value={condition}
-              onValueChange={(val) => setValue("condition", val)}
+              onValueChange={(val) => {
+                setValue("condition", val);
+                setValue("isProof", val === "PROOF");
+              }}
             >
               <SelectTrigger>
                 <SelectValue placeholder="Erhaltung wählen" />
@@ -280,9 +535,15 @@ export function CoinForm({
             <Checkbox
               id="isProof"
               checked={isProof}
-              onCheckedChange={(checked) =>
-                setValue("isProof", checked === true)
-              }
+              onCheckedChange={(checked) => {
+                const val = checked === true;
+                setValue("isProof", val);
+                if (val) {
+                  setValue("condition", "PROOF");
+                } else if (condition === "PROOF") {
+                  setValue("condition", "");
+                }
+              }}
             />
             <Label htmlFor="isProof">Polierte Platte</Label>
           </div>
@@ -306,17 +567,110 @@ export function CoinForm({
             />
             <Label htmlFor="hasCase">Etui</Label>
           </div>
-          <div className="flex items-center gap-2">
-            <Checkbox
-              id="hasCertificate"
-              checked={hasCertificate}
-              onCheckedChange={(checked) =>
-                setValue("hasCertificate", checked === true)
-              }
-            />
-            <Label htmlFor="hasCertificate">Zertifikat</Label>
-          </div>
         </div>
+
+        {/* Document capture */}
+        <input
+          ref={docInputRef}
+          type="file"
+          accept="image/*"
+          onChange={handleDocFile}
+          className="hidden"
+        />
+
+        {/* Document thumbnails */}
+        {documents.length > 0 && !docRawUrl && (
+          <div className="space-y-2">
+            <Label>Dokumente ({documents.length})</Label>
+            <div className="flex flex-wrap gap-3">
+              {documents.map((doc, i) => (
+                <div key={i} className="relative group">
+                  <img
+                    src={doc.preview}
+                    alt={`Dokument ${i + 1}`}
+                    className="h-24 rounded border object-contain"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleDocRemove(i)}
+                    className="absolute -top-2 -right-2 hidden group-hover:flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-destructive-foreground text-xs"
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* State: cropping raw document photo */}
+        {docRawUrl && docDimensions && docCrop && (
+          <div className="space-y-3 rounded-lg border border-dashed p-3">
+            <Label>Dokument zuschneiden</Label>
+            <PhotoCanvas
+              imageSrc={docRawUrl}
+              imageWidth={docDimensions.width}
+              imageHeight={docDimensions.height}
+              crop={docCrop}
+              onCropChange={setDocCrop}
+              maxDisplayHeight={400}
+              freeAspect
+            />
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                onClick={handleDocCropConfirm}
+              >
+                Bestätigen
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setDocRawUrl(null);
+                  setDocDimensions(null);
+                  setDocCrop(null);
+                  if (cameraConnected) {
+                    handleDocCapture();
+                  } else {
+                    docInputRef.current?.click();
+                  }
+                }}
+              >
+                Anderes Foto
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={handleDocCropCancel}
+              >
+                Abbrechen
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Add document button (always visible when not cropping) */}
+        {!docRawUrl && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              if (cameraConnected) {
+                handleDocCapture();
+              } else {
+                docInputRef.current?.click();
+              }
+            }}
+            disabled={docCapturing}
+          >
+            {docCapturing ? "Aufnahme..." : "Dokument hinzufügen"}
+          </Button>
+        )}
       </div>
 
       {/* Organization */}
@@ -324,6 +678,161 @@ export function CoinForm({
         <h3 className="text-sm font-semibold uppercase text-muted-foreground">
           Organisation
         </h3>
+        <div>
+          <Label>Sammlung</Label>
+          <div className="flex items-center gap-1">
+            <Select
+              value={collectionId || "none"}
+              onValueChange={(val) =>
+                setValue("collectionId", val === "none" ? null : val)
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Keine Sammlung" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">Keine Sammlung</SelectItem>
+                {collections.map((c) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="mt-1.5 flex items-center gap-1">
+            <Input
+              placeholder="Neue Sammlung..."
+              value={newCollectionName}
+              onChange={(e) => setNewCollectionName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  handleCreateCollection();
+                }
+              }}
+              className="h-8 text-sm"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 shrink-0"
+              disabled={!newCollectionName.trim() || creatingCollection}
+              onClick={handleCreateCollection}
+            >
+              +
+            </Button>
+          </div>
+          {collectionId && (() => {
+            const selectedCollection = collections.find((c) => c.id === collectionId);
+            if (!selectedCollection) return null;
+            return (
+              <div className="mt-2">
+                <input
+                  ref={collectionImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleCollectionImageFile}
+                />
+
+                {/* Crop canvas for collection image */}
+                {colImgRawUrl && colImgDimensions && colImgCrop ? (
+                  <div className="space-y-3 rounded-lg border border-dashed p-3">
+                    <Label>Sammlungs-Bild zuschneiden</Label>
+                    <PhotoCanvas
+                      imageSrc={colImgRawUrl}
+                      imageWidth={colImgDimensions.width}
+                      imageHeight={colImgDimensions.height}
+                      crop={colImgCrop}
+                      onCropChange={setColImgCrop}
+                      maxDisplayHeight={400}
+                      freeAspect
+                    />
+                    <div className="flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        onClick={handleCollectionImageCropConfirm}
+                        disabled={uploadingCollectionImage}
+                      >
+                        {uploadingCollectionImage ? "Hochladen..." : "Bestätigen"}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setColImgRawUrl(null);
+                          setColImgDimensions(null);
+                          setColImgCrop(null);
+                          if (cameraConnected) {
+                            handleCollectionImageCapture();
+                          } else {
+                            collectionImageInputRef.current?.click();
+                          }
+                        }}
+                      >
+                        Anderes Foto
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleCollectionImageCropCancel}
+                      >
+                        Abbrechen
+                      </Button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-muted-foreground">Sammlungs-Bilder</span>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        disabled={colImgCapturing}
+                        onClick={() => {
+                          if (cameraConnected) {
+                            handleCollectionImageCapture();
+                          } else {
+                            collectionImageInputRef.current?.click();
+                          }
+                        }}
+                      >
+                        {colImgCapturing ? "Aufnahme..." : "+ Bild"}
+                      </Button>
+                    </div>
+                    {selectedCollection.images.length > 0 && (
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {selectedCollection.images.map((img) => (
+                          <div key={img.id} className="group relative">
+                            <img
+                              src={img.thumbnailUrl}
+                              alt="Sammlungsbild"
+                              className="h-16 w-16 rounded border object-cover"
+                            />
+                            <button
+                              type="button"
+                              className="absolute -right-1 -top-1 hidden h-4 w-4 items-center justify-center rounded-full bg-destructive text-[10px] text-destructive-foreground group-hover:flex"
+                              onClick={() => handleDeleteCollectionImage(img.id)}
+                            >
+                              x
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            );
+          })()}
+        </div>
         <div>
           <Label htmlFor="storageLocation">Lagerort</Label>
           <Input

@@ -10,6 +10,7 @@ interface PhotoCanvasProps {
   crop: CropRect;
   onCropChange: (crop: CropRect) => void;
   maxDisplayHeight?: number;
+  freeAspect?: boolean;
 }
 
 type DragMode = "move" | "nw" | "ne" | "sw" | "se" | null;
@@ -21,6 +22,7 @@ export function PhotoCanvas({
   crop,
   onCropChange,
   maxDisplayHeight = 600,
+  freeAspect = false,
 }: PhotoCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -216,38 +218,74 @@ export function PhotoCanvas({
           width: start.width,
           height: start.height,
         };
-      } else {
-        // Resize - maintain square aspect ratio
-        const delta = Math.max(Math.abs(dx), Math.abs(dy));
-        const sign =
-          dragMode === "se"
-            ? 1
-            : dragMode === "nw"
-              ? -1
-              : dragMode === "ne"
-                ? (dx > 0 ? 1 : -1)
-                : (dx < 0 ? 1 : -1);
-
-        const sizeChange = sign * delta;
-
+      } else if (freeAspect) {
+        // Resize - independent width/height
         newCrop = { ...start };
 
         if (dragMode === "se") {
-          newCrop.width = Math.max(50, start.width + sizeChange);
-          newCrop.height = newCrop.width;
+          newCrop.width = Math.max(50, start.width + dx);
+          newCrop.height = Math.max(50, start.height + dy);
         } else if (dragMode === "nw") {
-          const newSize = Math.max(50, start.width - sizeChange);
+          const newW = Math.max(50, start.width - dx);
+          const newH = Math.max(50, start.height - dy);
+          newCrop.x = start.x + start.width - newW;
+          newCrop.y = start.y + start.height - newH;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        } else if (dragMode === "ne") {
+          const newW = Math.max(50, start.width + dx);
+          const newH = Math.max(50, start.height - dy);
+          newCrop.y = start.y + start.height - newH;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        } else if (dragMode === "sw") {
+          const newW = Math.max(50, start.width - dx);
+          const newH = Math.max(50, start.height + dy);
+          newCrop.x = start.x + start.width - newW;
+          newCrop.width = newW;
+          newCrop.height = newH;
+        }
+
+        // Clamp to image bounds
+        newCrop.x = Math.max(0, newCrop.x);
+        newCrop.y = Math.max(0, newCrop.y);
+        newCrop.width = Math.min(newCrop.width, imageWidth - newCrop.x);
+        newCrop.height = Math.min(newCrop.height, imageHeight - newCrop.y);
+      } else {
+        // Resize - maintain square aspect ratio
+        // Compute signed delta: positive = grow, negative = shrink
+        // Pick the dominant axis and preserve its sign relative to the corner
+        let signedDelta: number;
+        if (dragMode === "se") {
+          // SE: grow when dragging right (+dx) or down (+dy)
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? dx : dy;
+        } else if (dragMode === "nw") {
+          // NW: grow when dragging left (-dx) or up (-dy)
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? -dx : -dy;
+        } else if (dragMode === "ne") {
+          // NE: grow when dragging right (+dx) or up (-dy)
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? dx : -dy;
+        } else {
+          // SW: grow when dragging left (-dx) or down (+dy)
+          signedDelta = Math.abs(dx) > Math.abs(dy) ? -dx : dy;
+        }
+
+        const newSize = Math.max(50, start.width + signedDelta);
+        newCrop = { ...start };
+
+        if (dragMode === "se") {
+          newCrop.width = newSize;
+          newCrop.height = newSize;
+        } else if (dragMode === "nw") {
           newCrop.x = start.x + start.width - newSize;
           newCrop.y = start.y + start.height - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
         } else if (dragMode === "ne") {
-          const newSize = Math.max(50, start.width + sizeChange);
           newCrop.y = start.y + start.height - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
         } else if (dragMode === "sw") {
-          const newSize = Math.max(50, start.width + sizeChange);
           newCrop.x = start.x + start.width - newSize;
           newCrop.width = newSize;
           newCrop.height = newSize;
@@ -262,7 +300,7 @@ export function PhotoCanvas({
 
       onCropChange(newCrop);
     },
-    [dragMode, getCanvasPos, scaleFactor, imageWidth, imageHeight, onCropChange, getDragMode]
+    [dragMode, getCanvasPos, scaleFactor, imageWidth, imageHeight, onCropChange, getDragMode, freeAspect]
   );
 
   const handleMouseUp = useCallback(() => {

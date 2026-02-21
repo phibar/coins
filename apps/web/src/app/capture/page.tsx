@@ -7,8 +7,11 @@ import { useCaptureSession } from "@/hooks/use-capture-session";
 import { PhotoCanvas } from "./_components/photo-canvas";
 import { GridCanvas } from "./_components/grid-canvas";
 import { GridConfigPanel } from "./_components/grid-config-panel";
+import { MultiCropCanvas } from "./_components/multi-crop-canvas";
+import { MultiConfigPanel } from "./_components/multi-config-panel";
 import { CoinForm } from "./_components/coin-form";
-import type { CoinFormData, CropRect } from "@/types/capture";
+import type { CollectionWithImages } from "./_components/coin-form";
+import type { CoinFormData, CropRect, MultiCropItem } from "@/types/capture";
 import { toast } from "sonner";
 import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
 
@@ -25,6 +28,32 @@ export default function CapturePage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const backFileInputRef = useRef<HTMLInputElement>(null);
 
+  // Camera status polling
+  const [cameraConnected, setCameraConnected] = useState(false);
+  const [collections, setCollections] = useState<CollectionWithImages[]>([]);
+
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch("/api/camera/status");
+        const data = await res.json();
+        setCameraConnected(data.connected);
+      } catch {
+        setCameraConnected(false);
+      }
+    };
+    check();
+    const interval = setInterval(check, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/collections")
+      .then((r) => r.json())
+      .then((data) => setCollections(data))
+      .catch(() => {});
+  }, []);
+
   const handleFileUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -38,12 +67,12 @@ export default function CapturePage() {
       const file = e.target.files?.[0];
       if (!file) return;
 
-      if (state.mode === "single") {
+      if (state.mode === "single" || state.mode === "numisbrief") {
         const url = URL.createObjectURL(file);
         const img = new Image();
         img.onload = () => {
           dispatch({
-            type: "SINGLE_BACK_COMPLETE",
+            type: state.mode === "numisbrief" ? "NUMISBRIEF_BACK_COMPLETE" : "SINGLE_BACK_COMPLETE",
             photo: url,
             width: img.naturalWidth,
             height: img.naturalHeight,
@@ -53,7 +82,7 @@ export default function CapturePage() {
         return;
       }
 
-      // Grid mode: optionally flip, then load dimensions
+      // Grid/Multi mode: optionally flip, then load dimensions
       const reader = new FileReader();
       reader.onload = async () => {
         try {
@@ -84,7 +113,7 @@ export default function CapturePage() {
           });
 
           dispatch({
-            type: "BACK_CAPTURE_COMPLETE",
+            type: state.mode === "multi" ? "MULTI_BACK_COMPLETE" : "BACK_CAPTURE_COMPLETE",
             photo: finalUrl,
             width: img.naturalWidth,
             height: img.naturalHeight,
@@ -132,7 +161,7 @@ export default function CapturePage() {
       });
 
       dispatch({
-        type: "BACK_CAPTURE_COMPLETE",
+        type: state.mode === "multi" ? "MULTI_BACK_COMPLETE" : "BACK_CAPTURE_COMPLETE",
         photo: finalUrl,
         width: img.naturalWidth,
         height: img.naturalHeight,
@@ -141,7 +170,32 @@ export default function CapturePage() {
       toast.error("Fehler beim Aufnehmen der Rückseite");
       dispatch({ type: "CAPTURE_FAILED" });
     }
-  }, [dispatch, state.flipMode]);
+  }, [dispatch, state.flipMode, state.mode]);
+
+  const captureNumisbriefBack = useCallback(async () => {
+    dispatch({ type: "START_BACK_CAPTURE" });
+    try {
+      const response = await fetch("/api/camera/capture", { method: "POST" });
+      if (!response.ok) throw new Error("Capture failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const img = new window.Image();
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => resolve();
+        img.onerror = () => reject(new Error("Image load failed"));
+        img.src = url;
+      });
+      dispatch({
+        type: "NUMISBRIEF_BACK_COMPLETE",
+        photo: url,
+        width: img.naturalWidth,
+        height: img.naturalHeight,
+      });
+    } catch {
+      toast.error("Fehler beim Aufnehmen der Rückseite");
+      dispatch({ type: "CAPTURE_FAILED" });
+    }
+  }, [dispatch]);
 
   const handleCropChange = useCallback(
     (crop: CropRect) => {
@@ -153,6 +207,20 @@ export default function CapturePage() {
   const handleBackCropChange = useCallback(
     (crop: CropRect) => {
       dispatch({ type: "SET_SINGLE_BACK_CROP", crop });
+    },
+    [dispatch]
+  );
+
+  const handleNumisbriefCropChange = useCallback(
+    (crop: CropRect) => {
+      dispatch({ type: "SET_NUMISBRIEF_CROP", crop });
+    },
+    [dispatch]
+  );
+
+  const handleNumisbriefBackCropChange = useCallback(
+    (crop: CropRect) => {
+      dispatch({ type: "SET_NUMISBRIEF_BACK_CROP", crop });
     },
     [dispatch]
   );
@@ -243,6 +311,7 @@ export default function CapturePage() {
             formData,
             frontImageBase64,
             backImageBase64,
+            documentImagesBase64: formData.documentImagesBase64 || [],
             frontCrop: currentCoin?.frontCrop,
             backCrop: currentCoin?.backCrop,
           }),
@@ -368,10 +437,26 @@ export default function CapturePage() {
           `${result.coins.length} Münzen erkannt (${result.suggestedGrid.rows}×${result.suggestedGrid.cols} Grid)`
         );
       } else {
-        toast.info(
-          `${result.coins.length} Münzen erkannt, aber kein klares Grid. Bitte manuell konfigurieren.`
+        // Multiple coins without clear grid → multi mode
+        dispatch({ type: "SELECT_MODE", mode: "multi" });
+        for (const coin of result.coins) {
+          const size = Math.max(coin.width, coin.height) * 1.1;
+          dispatch({
+            type: "ADD_MULTI_CROP",
+            crop: {
+              id: crypto.randomUUID(),
+              crop: {
+                x: Math.max(0, coin.centerX - size / 2),
+                y: Math.max(0, coin.centerY - size / 2),
+                width: size,
+                height: size,
+              },
+            },
+          });
+        }
+        toast.success(
+          `${result.coins.length} Münzen erkannt (Multi-Modus)`
         );
-        dispatch({ type: "SELECT_MODE", mode: "grid" });
       }
     } catch {
       toast.error("Auto-Erkennung fehlgeschlagen");
@@ -444,6 +529,74 @@ export default function CapturePage() {
     }
   }, [runDetection, dispatch]);
 
+  const handleAutoDetectMulti = useCallback(async () => {
+    setDetecting(true);
+    try {
+      const result = await runDetection();
+      if (!result || result.coins.length === 0) {
+        toast.info("Keine Münzen erkannt.");
+        return;
+      }
+      for (const coin of result.coins) {
+        const size = Math.max(coin.width, coin.height) * 1.1;
+        dispatch({
+          type: "ADD_MULTI_CROP",
+          crop: {
+            id: crypto.randomUUID(),
+            crop: {
+              x: Math.max(0, coin.centerX - size / 2),
+              y: Math.max(0, coin.centerY - size / 2),
+              width: size,
+              height: size,
+            },
+          },
+        });
+      }
+      toast.success(`${result.coins.length} Münzen erkannt!`);
+    } catch {
+      toast.error("Auto-Erkennung fehlgeschlagen");
+    } finally {
+      setDetecting(false);
+    }
+  }, [runDetection, dispatch]);
+
+  // Front-side preview for multi back-align step
+  const [multiBackPreview, setMultiBackPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (
+      state.step !== "multi_back_align" ||
+      !state.selectedMultiCropId ||
+      !state.frontPhoto
+    ) {
+      setMultiBackPreview(null);
+      return;
+    }
+    const frontItem = state.multiCrops.find(
+      (c) => c.id === state.selectedMultiCropId
+    );
+    if (!frontItem) {
+      setMultiBackPreview(null);
+      return;
+    }
+
+    let cancelled = false;
+    generateCropPreviewUrl(state.frontPhoto, frontItem.crop, 200).then(
+      (url) => {
+        if (!cancelled) setMultiBackPreview(url);
+        else URL.revokeObjectURL(url);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    state.step,
+    state.selectedMultiCropId,
+    state.frontPhoto,
+    state.multiCrops,
+  ]);
+
   const gridCoinCount =
     state.gridConfig
       ? state.gridConfig.rows * state.gridConfig.cols -
@@ -462,15 +615,18 @@ export default function CapturePage() {
       const step = state.step;
 
       if (step === "idle") {
-        if (e.key === " " || e.key === "Enter") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
           e.preventDefault();
           capturePhoto();
-        } else if (e.key === "l" || e.key === "L") {
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
           e.preventDefault();
           fileInputRef.current?.click();
         }
       } else if (step === "select_mode") {
-        if (e.key === "a" || e.key === "A") {
+        if (e.key === "b" || e.key === "B") {
+          e.preventDefault();
+          dispatch({ type: "MARK_AS_BACK" });
+        } else if (e.key === "a" || e.key === "A") {
           e.preventDefault();
           if (!detecting) handleAutoDetect();
         } else if (e.key === "1") {
@@ -479,9 +635,54 @@ export default function CapturePage() {
         } else if (e.key === "2") {
           e.preventDefault();
           dispatch({ type: "SELECT_MODE", mode: "grid" });
+        } else if (e.key === "3") {
+          e.preventDefault();
+          dispatch({ type: "SELECT_MODE", mode: "multi" });
+        } else if (e.key === "n" || e.key === "N") {
+          e.preventDefault();
+          dispatch({ type: "SELECT_MODE", mode: "numisbrief" });
         } else if (e.key === "Escape") {
           e.preventDefault();
           dispatch({ type: "RESET" });
+        }
+      } else if (step === "numisbrief_crop") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" });
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateFront();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "numisbrief_back_capture") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
+          e.preventDefault();
+          captureNumisbriefBack();
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_NUMISBRIEF_BACK" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "numisbrief_back_crop") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" });
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_NUMISBRIEF_BACK" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RETAKE_NUMISBRIEF_BACK" });
         }
       } else if (step === "single_crop") {
         if (e.key === "Enter") {
@@ -498,10 +699,10 @@ export default function CapturePage() {
           dispatch({ type: "RESET" });
         }
       } else if (step === "single_back_capture") {
-        if (e.key === " " || e.key === "Enter") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
           e.preventDefault();
           captureBackPhoto();
-        } else if (e.key === "l" || e.key === "L") {
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
           e.preventDefault();
           backFileInputRef.current?.click();
         } else if (e.key === "s" || e.key === "S") {
@@ -539,11 +740,74 @@ export default function CapturePage() {
           e.preventDefault();
           dispatch({ type: "RESET" });
         }
-      } else if (step === "grid_back_capture") {
-        if (e.key === " " || e.key === "Enter") {
+      } else if (step === "multi_crop") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (state.multiCrops.length > 0)
+            dispatch({ type: "CONFIRM_MULTI_FRONT" });
+        } else if (e.key === "Delete" || e.key === "Backspace") {
+          e.preventDefault();
+          if (state.selectedMultiCropId)
+            dispatch({
+              type: "DELETE_MULTI_CROP",
+              id: state.selectedMultiCropId,
+            });
+        } else if (e.key === "a" || e.key === "A") {
+          e.preventDefault();
+          if (!detecting) handleAutoDetectMulti();
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateFront();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "multi_back_capture") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
           e.preventDefault();
           handleCaptureBack();
-        } else if (e.key === "l" || e.key === "L") {
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_MULTI_BACK" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "multi_back_align") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_MULTI_BACK_ALIGN" });
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "Tab") {
+          e.preventDefault();
+          // Cycle through multi back crops
+          const crops = state.multiBackCrops;
+          if (crops.length > 0) {
+            const currentIdx = crops.findIndex(
+              (c) => c.id === state.selectedMultiCropId
+            );
+            const nextIdx = e.shiftKey
+              ? (currentIdx - 1 + crops.length) % crops.length
+              : (currentIdx + 1) % crops.length;
+            dispatch({
+              type: "SELECT_MULTI_BACK_CROP",
+              id: crops[nextIdx].id,
+            });
+          }
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RETAKE_MULTI_BACK" });
+        }
+      } else if (step === "grid_back_capture") {
+        if ((e.key === " " || e.key === "Enter") && cameraConnected) {
+          e.preventDefault();
+          handleCaptureBack();
+        } else if ((e.key === "l" || e.key === "L") && !cameraConnected) {
           e.preventDefault();
           backFileInputRef.current?.click();
         } else if (e.key === "s" || e.key === "S") {
@@ -578,9 +842,10 @@ export default function CapturePage() {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [
-    state.step, detecting, rotating, gridCoinCount,
-    capturePhoto, captureBackPhoto, handleAutoDetect,
-    handleAutoDetectSingle, handleAutoDetectGrid,
+    state.step, state.multiCrops, state.multiBackCrops,
+    state.selectedMultiCropId, detecting, rotating, gridCoinCount,
+    cameraConnected, capturePhoto, captureBackPhoto, captureNumisbriefBack, handleAutoDetect,
+    handleAutoDetectSingle, handleAutoDetectGrid, handleAutoDetectMulti,
     handleRotateFront, handleRotateBack, handleCaptureBack,
     dispatch,
   ]);
@@ -589,28 +854,37 @@ export default function CapturePage() {
     <div className="container mx-auto px-4 py-8">
       <h1 className="mb-6 text-3xl font-bold">Münzen erfassen</h1>
 
+      {/* Hidden file inputs */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleFileUpload}
+        className="hidden"
+      />
+      <input
+        ref={backFileInputRef}
+        type="file"
+        accept="image/*"
+        onChange={handleBackFileUpload}
+        className="hidden"
+      />
+
       {/* Step: Idle */}
       {state.step === "idle" && (
         <div className="flex gap-4">
-          <Button size="lg" onClick={capturePhoto}>
-            Foto aufnehmen<Kbd>↵</Kbd>
-          </Button>
-          <div>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              onChange={handleFileUpload}
-              className="hidden"
-            />
+          {cameraConnected ? (
+            <Button size="lg" onClick={capturePhoto}>
+              Foto aufnehmen<Kbd>↵</Kbd>
+            </Button>
+          ) : (
             <Button
               size="lg"
-              variant="outline"
               onClick={() => fileInputRef.current?.click()}
             >
               Bild laden<Kbd>L</Kbd>
             </Button>
-          </div>
+          )}
         </div>
       )}
 
@@ -625,6 +899,11 @@ export default function CapturePage() {
       {/* Step: Select mode */}
       {state.step === "select_mode" && (
         <div className="space-y-6">
+          {state.backOnly && (
+            <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-600 dark:text-blue-400">
+              Rückseiten-Modus — Vorderseite wird übersprungen
+            </div>
+          )}
           <div className="flex flex-wrap gap-4">
             <Button
               size="lg"
@@ -653,6 +932,31 @@ export default function CapturePage() {
             </Button>
             <Button
               size="lg"
+              variant="outline"
+              onClick={() =>
+                dispatch({ type: "SELECT_MODE", mode: "multi" })
+              }
+            >
+              Multi-Auswahl<Kbd>3</Kbd>
+            </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() =>
+                dispatch({ type: "SELECT_MODE", mode: "numisbrief" })
+              }
+            >
+              Numisbrief<Kbd>N</Kbd>
+            </Button>
+            <Button
+              size="lg"
+              variant={state.backOnly ? "default" : "outline"}
+              onClick={() => dispatch({ type: "MARK_AS_BACK" })}
+            >
+              Dies ist die Rückseite<Kbd>B</Kbd>
+            </Button>
+            <Button
+              size="lg"
               variant="ghost"
               onClick={() => dispatch({ type: "RESET" })}
             >
@@ -668,6 +972,143 @@ export default function CapturePage() {
           )}
         </div>
       )}
+
+      {/* Step: Numisbrief crop */}
+      {state.step === "numisbrief_crop" &&
+        state.frontPhoto &&
+        state.numisbriefCrop && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Numisbrief — Ausschnitt wählen</h2>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateFront}
+                  disabled={rotating}
+                >
+                  Drehen<Kbd>R</Kbd>
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() => dispatch({ type: "RESET" })}
+                >
+                  Neu aufnehmen<Kbd>Esc</Kbd>
+                </Button>
+                <Button
+                  onClick={() =>
+                    dispatch({ type: "CONFIRM_NUMISBRIEF_CROP" })
+                  }
+                >
+                  Bestätigen<Kbd>↵</Kbd>
+                </Button>
+              </div>
+            </div>
+            <PhotoCanvas
+              imageSrc={state.frontPhoto}
+              imageWidth={state.imageWidth}
+              imageHeight={state.imageHeight}
+              crop={state.numisbriefCrop}
+              onCropChange={handleNumisbriefCropChange}
+              freeAspect
+            />
+            <p className="text-sm text-muted-foreground">
+              Ziehe den Ausschnitt über den Numisbrief. Ecken zum
+              Vergrößern/Verkleinern.
+            </p>
+          </div>
+        )}
+
+      {/* Step: Numisbrief back capture */}
+      {state.step === "numisbrief_back_capture" && (
+        <div className="space-y-6">
+          <h2 className="text-lg font-semibold">Rückseite aufnehmen</h2>
+          <p className="text-muted-foreground">
+            Drehe den Numisbrief um und nehme ein Foto der Rückseite auf.
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {cameraConnected ? (
+              <Button size="lg" onClick={captureNumisbriefBack}>
+                Rückseite aufnehmen<Kbd>↵</Kbd>
+              </Button>
+            ) : (
+              <>
+                <Button
+                  size="lg"
+                  variant="outline"
+                  onClick={() => backFileInputRef.current?.click()}
+                >
+                  Bild laden<Kbd>L</Kbd>
+                </Button>
+              </>
+            )}
+            <Button
+              size="lg"
+              variant="ghost"
+              onClick={() =>
+                dispatch({ type: "SKIP_NUMISBRIEF_BACK" })
+              }
+            >
+              Überspringen<Kbd>S</Kbd>
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Step: Numisbrief back crop */}
+      {state.step === "numisbrief_back_crop" &&
+        state.backPhoto &&
+        state.numisbriefBackCrop && (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-lg font-semibold">Numisbrief Rückseite — Ausschnitt wählen</h2>
+              <div className="flex gap-2">
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleRotateBack}
+                  disabled={rotating}
+                >
+                  Drehen<Kbd>R</Kbd>
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    dispatch({ type: "SKIP_NUMISBRIEF_BACK" })
+                  }
+                >
+                  Überspringen<Kbd>S</Kbd>
+                </Button>
+                <Button
+                  variant="ghost"
+                  onClick={() =>
+                    dispatch({ type: "RETAKE_NUMISBRIEF_BACK" })
+                  }
+                >
+                  Neu aufnehmen<Kbd>Esc</Kbd>
+                </Button>
+                <Button
+                  onClick={() =>
+                    dispatch({ type: "CONFIRM_NUMISBRIEF_BACK_CROP" })
+                  }
+                >
+                  Bestätigen<Kbd>↵</Kbd>
+                </Button>
+              </div>
+            </div>
+            <PhotoCanvas
+              imageSrc={state.backPhoto}
+              imageWidth={state.backImageWidth}
+              imageHeight={state.backImageHeight}
+              crop={state.numisbriefBackCrop}
+              onCropChange={handleNumisbriefBackCropChange}
+              freeAspect
+            />
+            <p className="text-sm text-muted-foreground">
+              Ziehe den Ausschnitt über die Rückseite des Numisbriefs.
+            </p>
+          </div>
+        )}
 
       {/* Step: Single crop */}
       {state.step === "single_crop" &&
@@ -730,25 +1171,18 @@ export default function CapturePage() {
             Drehe die Münze um und nehme ein Foto der Rückseite auf.
           </p>
           <div className="flex gap-4">
-            <Button size="lg" onClick={captureBackPhoto}>
-              Rückseite fotografieren<Kbd>↵</Kbd>
-            </Button>
-            <div>
-              <input
-                ref={backFileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleBackFileUpload}
-                className="hidden"
-              />
+            {cameraConnected ? (
+              <Button size="lg" onClick={captureBackPhoto}>
+                Rückseite fotografieren<Kbd>↵</Kbd>
+              </Button>
+            ) : (
               <Button
                 size="lg"
-                variant="outline"
                 onClick={() => backFileInputRef.current?.click()}
               >
                 Bild laden<Kbd>L</Kbd>
               </Button>
-            </div>
+            )}
             <Button
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
@@ -897,25 +1331,18 @@ export default function CapturePage() {
               : "Drehe alle Münzen einzeln um und nehme ein Foto der Rückseiten auf."}
           </p>
           <div className="flex gap-4">
-            <Button size="lg" onClick={handleCaptureBack}>
-              Rückseite fotografieren<Kbd>↵</Kbd>
-            </Button>
-            <div>
-              <input
-                ref={backFileInputRef}
-                type="file"
-                accept="image/*"
-                onChange={handleBackFileUpload}
-                className="hidden"
-              />
+            {cameraConnected ? (
+              <Button size="lg" onClick={handleCaptureBack}>
+                Rückseite fotografieren<Kbd>↵</Kbd>
+              </Button>
+            ) : (
               <Button
                 size="lg"
-                variant="outline"
                 onClick={() => backFileInputRef.current?.click()}
               >
                 Bild laden<Kbd>L</Kbd>
               </Button>
-            </div>
+            )}
             <Button
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_BACK_CAPTURE" })}
@@ -1005,6 +1432,187 @@ export default function CapturePage() {
           </div>
         )}
 
+      {/* Step: Multi crop */}
+      {state.step === "multi_crop" && state.frontPhoto && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">Münzen markieren</h2>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRotateFront}
+              disabled={rotating}
+            >
+              Drehen<Kbd>R</Kbd>
+            </Button>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
+            <MultiCropCanvas
+              imageSrc={state.frontPhoto}
+              imageWidth={state.imageWidth}
+              imageHeight={state.imageHeight}
+              crops={state.multiCrops}
+              selectedCropId={state.selectedMultiCropId}
+              onAddCrop={(crop: MultiCropItem) =>
+                dispatch({ type: "ADD_MULTI_CROP", crop })
+              }
+              onUpdateCrop={(id: string, crop: CropRect) =>
+                dispatch({ type: "UPDATE_MULTI_CROP", id, crop })
+              }
+              onDeleteCrop={(id: string) =>
+                dispatch({ type: "DELETE_MULTI_CROP", id })
+              }
+              onSelectCrop={(id: string | null) =>
+                dispatch({ type: "SELECT_MULTI_CROP", id })
+              }
+            />
+            <MultiConfigPanel
+              cropCount={state.multiCrops.length}
+              flipMode={state.flipMode}
+              onFlipModeChange={(flipMode) =>
+                dispatch({ type: "SET_FLIP_MODE", flipMode })
+              }
+              onConfirm={() => dispatch({ type: "CONFIRM_MULTI_FRONT" })}
+              onCancel={() => dispatch({ type: "RESET" })}
+              onAutoDetect={handleAutoDetectMulti}
+              autoDetecting={detecting}
+              onDeleteSelected={() => {
+                if (state.selectedMultiCropId)
+                  dispatch({
+                    type: "DELETE_MULTI_CROP",
+                    id: state.selectedMultiCropId,
+                  });
+              }}
+              hasSelection={!!state.selectedMultiCropId}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Step: Multi back capture */}
+      {state.step === "multi_back_capture" && (
+        <div className="space-y-6">
+          <h2 className="text-lg font-semibold">Rückseite aufnehmen</h2>
+          <p className="text-muted-foreground">
+            {state.flipMode === "book"
+              ? "Drehe die Münzen wie ein Buch um. Das Bild wird automatisch gespiegelt."
+              : "Drehe alle Münzen einzeln um und nehme ein Foto der Rückseiten auf."}
+          </p>
+          <div className="flex gap-4">
+            {cameraConnected ? (
+              <Button size="lg" onClick={handleCaptureBack}>
+                Rückseite fotografieren<Kbd>↵</Kbd>
+              </Button>
+            ) : (
+              <Button
+                size="lg"
+                onClick={() => backFileInputRef.current?.click()}
+              >
+                Bild laden<Kbd>L</Kbd>
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              onClick={() => dispatch({ type: "SKIP_MULTI_BACK" })}
+            >
+              Überspringen<Kbd>S</Kbd>
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => dispatch({ type: "RESET" })}
+            >
+              Neu aufnehmen<Kbd>Esc</Kbd>
+            </Button>
+          </div>
+          {state.frontPhoto && (
+            <div>
+              <p className="mb-2 text-sm text-muted-foreground">
+                Vorderseite (Referenz):
+              </p>
+              <img
+                src={state.frontPhoto}
+                alt="Vorderseite"
+                className="max-h-64 rounded-lg border"
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Step: Multi back alignment */}
+      {state.step === "multi_back_align" && state.backPhoto && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-lg font-semibold">
+              Rückseite: Ausschnitte positionieren
+            </h2>
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={handleRotateBack}
+              disabled={rotating}
+            >
+              Drehen<Kbd>R</Kbd>
+            </Button>
+          </div>
+          <div className="grid gap-6 lg:grid-cols-[1fr_250px]">
+            <MultiCropCanvas
+              imageSrc={state.backPhoto}
+              imageWidth={state.backImageWidth}
+              imageHeight={state.backImageHeight}
+              crops={state.multiBackCrops}
+              selectedCropId={state.selectedMultiCropId}
+              onAddCrop={() => {}}
+              onUpdateCrop={(id: string, crop: CropRect) =>
+                dispatch({ type: "UPDATE_MULTI_BACK_CROP", id, crop })
+              }
+              onDeleteCrop={() => {}}
+              onSelectCrop={(id: string | null) =>
+                dispatch({ type: "SELECT_MULTI_BACK_CROP", id })
+              }
+              readOnly
+              previewImageSrc={state.frontPhoto ?? undefined}
+              previewCrops={state.multiCrops}
+            />
+            <div className="space-y-4 rounded-lg border bg-card p-4">
+              {multiBackPreview && (
+                <div>
+                  <p className="mb-1 text-xs text-muted-foreground">
+                    Vorderseite:
+                  </p>
+                  <img
+                    src={multiBackPreview}
+                    alt="Vorderseite-Vorschau"
+                    className="w-full rounded border"
+                  />
+                </div>
+              )}
+              <p className="text-xs text-muted-foreground">
+                Klicke auf einen Ausschnitt und verschiebe ihn auf die passende
+                Rückseite. <strong>Tab</strong> wechselt zwischen Ausschnitten.
+              </p>
+              <div className="flex flex-col gap-2">
+                <Button
+                  onClick={() =>
+                    dispatch({ type: "CONFIRM_MULTI_BACK_ALIGN" })
+                  }
+                >
+                  Bestätigen<Kbd>↵</Kbd>
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() =>
+                    dispatch({ type: "RETAKE_MULTI_BACK" })
+                  }
+                >
+                  Rückseite neu<Kbd>Esc</Kbd>
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Step: Coin entry */}
       {state.step === "coin_entry" && (
         <div className="grid gap-8 lg:grid-cols-2">
@@ -1034,16 +1642,26 @@ export default function CapturePage() {
                 coinIndex={state.currentCoinIndex}
                 totalCoins={state.coins.length}
                 saving={false}
+                cameraConnected={cameraConnected}
+                collections={collections}
+                onCollectionsChange={setCollections}
               />
             </CardContent>
           </Card>
           <div className="space-y-4">
-            {state.coins.length > 1 && state.coins[state.currentCoinIndex] && (
+            {state.mode === "grid" &&
+              state.coins.length > 1 &&
+              state.coins[state.currentCoinIndex] && (
+                <div className="text-sm text-muted-foreground">
+                  Position: Zeile{" "}
+                  {(state.coins[state.currentCoinIndex].gridRow ?? 0) + 1},
+                  Spalte{" "}
+                  {(state.coins[state.currentCoinIndex].gridCol ?? 0) + 1}
+                </div>
+              )}
+            {state.mode === "multi" && state.coins.length > 1 && (
               <div className="text-sm text-muted-foreground">
-                Position: Zeile{" "}
-                {(state.coins[state.currentCoinIndex].gridRow ?? 0) + 1},
-                Spalte{" "}
-                {(state.coins[state.currentCoinIndex].gridCol ?? 0) + 1}
+                Münze {state.currentCoinIndex + 1} von {state.coins.length}
               </div>
             )}
           </div>
@@ -1062,7 +1680,7 @@ export default function CapturePage() {
       {state.step === "saved" && (
         <div className="space-y-4">
           <h2 className="text-lg font-semibold text-green-600">
-            {state.mode === "grid"
+            {state.mode === "grid" || state.mode === "multi"
               ? "Alle Münzen erfolgreich gespeichert!"
               : "Münze erfolgreich gespeichert!"}
           </h2>

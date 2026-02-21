@@ -14,12 +14,14 @@ import type {
 } from "@/types/capture";
 
 const CONDITION_LABELS: Record<string, string> = {
-  s: "s - schön",
-  ss: "ss - sehr schön",
-  vz: "vz - vorzüglich",
-  st: "st - Stempelglanz",
-  stgl: "stgl - Stempelglanz",
-  PP: "PP - Polierte Platte",
+  G: "G - Good",
+  VG: "VG - Very Good",
+  F: "F - Fine",
+  VF: "VF - Very Fine",
+  XF: "XF - Extra Fine",
+  AU: "AU - About Uncirculated",
+  UNC: "UNC - Uncirculated",
+  PROOF: "PROOF - Polierte Platte",
 };
 
 interface DetailPageProps {
@@ -37,13 +39,17 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
 
   const coin = await prisma.coin.findUnique({
     where: { id },
-    include: { images: { orderBy: { sortOrder: "asc" } } },
+    include: {
+      images: { orderBy: { sortOrder: "asc" } },
+      collection: { include: { images: { orderBy: { sortOrder: "asc" } } } },
+    },
   });
 
   if (!coin) notFound();
 
   const obverse = coin.images.find((i) => i.type === "obverse");
   const reverse = coin.images.find((i) => i.type === "reverse");
+  const documents = coin.images.filter((i) => i.type === "certificate");
 
   // Parse Json fields
   const prices = json<NumistaPriceData>(coin.numistaPrices);
@@ -82,6 +88,14 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
             Auf Numista ansehen &rarr;
           </a>
         )}
+        {coin.collection && (
+          <Link
+            href={`/collection?collectionId=${coin.collection.id}`}
+            className="mt-1 inline-block rounded-full bg-primary/10 px-3 py-0.5 text-sm hover:bg-primary/20"
+          >
+            {coin.collection.name}
+          </Link>
+        )}
       </div>
 
       {/* Images */}
@@ -99,6 +113,44 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
           faceData={reverseData}
         />
       </div>
+
+      {/* Documents */}
+      {documents.length > 0 && (
+        <div className="mb-6">
+          <p className="mb-2 text-sm font-medium text-muted-foreground">
+            Dokumente ({documents.length})
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {documents.map((doc, i) => (
+              <img
+                key={doc.id}
+                src={doc.url}
+                alt={`Dokument ${i + 1}`}
+                className="max-h-48 rounded-lg border"
+              />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Collection images */}
+      {coin.collection && coin.collection.images.length > 0 && (
+        <div className="mb-6">
+          <p className="mb-2 text-sm font-medium text-muted-foreground">
+            Sammlungs-Bilder — {coin.collection.name} ({coin.collection.images.length})
+          </p>
+          <div className="flex flex-wrap gap-3">
+            {coin.collection.images.map((img, i) => (
+              <img
+                key={img.id}
+                src={img.url}
+                alt={`${coin.collection!.name} Bild ${i + 1}`}
+                className="max-h-48 rounded-lg border"
+              />
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Price estimation */}
       {(prices?.prices?.length || coin.estimatedValue) && (
@@ -214,7 +266,7 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
             {coin.isFirstDay && <DetailRow label="Ersttag" value="Ja" />}
             {coin.hasCase && <DetailRow label="Etui" value="Ja" />}
             {coin.hasCertificate && (
-              <DetailRow label="Zertifikat" value="Ja" />
+              <DetailRow label="Dokumente" value="Ja" />
             )}
           </div>
         </div>

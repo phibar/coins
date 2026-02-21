@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import sharp from "sharp";
 import { prisma } from "@/lib/prisma";
 import { cropImage, generateThumbnail } from "@/lib/image-processing";
 import { uploadToS3 } from "@/lib/s3";
@@ -11,6 +12,7 @@ export async function POST(request: NextRequest) {
       formData,
       frontImageBase64,
       backImageBase64,
+      documentImagesBase64,
       frontCrop,
       backCrop,
     } = body;
@@ -71,6 +73,9 @@ export async function POST(request: NextRequest) {
         numistaIssues: formData.numistaIssues || undefined,
         numistaPrices: formData.numistaPrices || undefined,
         numistaRelatedTypes: formData.numistaRelatedTypes || undefined,
+
+        // Collection
+        collectionId: formData.collectionId || null,
       },
     });
 
@@ -122,6 +127,37 @@ export async function POST(request: NextRequest) {
       });
     }
 
+    // Process and upload document images
+    if (documentImagesBase64?.length > 0) {
+      for (let i = 0; i < documentImagesBase64.length; i++) {
+        const docBuffer = Buffer.from(documentImagesBase64[i], "base64");
+        const processed = await sharp(docBuffer)
+          .rotate()
+          .resize(2000, 2000, { fit: "inside", withoutEnlargement: true })
+          .jpeg({ quality: 90 })
+          .toBuffer();
+        const thumbnail = await generateThumbnail(processed);
+
+        const s3Key = `coins/${coin.id}/document_${i}.jpg`;
+        const s3KeyThumb = `coins/${coin.id}/document_${i}_thumb.jpg`;
+
+        const url = await uploadToS3(s3Key, processed, "image/jpeg");
+        const thumbnailUrl = await uploadToS3(s3KeyThumb, thumbnail, "image/jpeg");
+
+        await prisma.coinImage.create({
+          data: {
+            coinId: coin.id,
+            type: "certificate",
+            url,
+            thumbnailUrl,
+            s3Key,
+            s3KeyThumb,
+            sortOrder: 2 + i,
+          },
+        });
+      }
+    }
+
     return NextResponse.json(coin, { status: 201 });
   } catch (error) {
     console.error("Failed to save coin:", error);
@@ -141,6 +177,13 @@ export async function GET(request: NextRequest) {
   const year = searchParams.get("year");
   const mintMark = searchParams.get("mintMark");
   const condition = searchParams.get("condition");
+  const collectionId = searchParams.get("collectionId");
+  const material = searchParams.get("material");
+  const series = searchParams.get("series");
+  const storageLocation = searchParams.get("storageLocation");
+  const isProof = searchParams.get("isProof");
+  const hasCase = searchParams.get("hasCase");
+  const hasCertificate = searchParams.get("hasCertificate");
   const q = searchParams.get("q");
 
   const where: Record<string, unknown> = {};
@@ -150,12 +193,20 @@ export async function GET(request: NextRequest) {
   if (year) where.year = parseInt(year);
   if (mintMark) where.mintMark = mintMark;
   if (condition) where.condition = condition;
+  if (collectionId) where.collectionId = collectionId;
+  if (material) where.material = material;
+  if (series) where.series = { contains: series, mode: "insensitive" };
+  if (storageLocation) where.storageLocation = storageLocation;
+  if (isProof === "true") where.isProof = true;
+  if (hasCase === "true") where.hasCase = true;
+  if (hasCertificate === "true") where.hasCertificate = true;
   if (q) {
     where.OR = [
       { country: { contains: q, mode: "insensitive" } },
       { denomination: { contains: q, mode: "insensitive" } },
       { numistaTitle: { contains: q, mode: "insensitive" } },
       { notes: { contains: q, mode: "insensitive" } },
+      { series: { contains: q, mode: "insensitive" } },
     ];
   }
 

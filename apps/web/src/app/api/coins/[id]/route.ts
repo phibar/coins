@@ -2,6 +2,28 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { deleteFromS3 } from "@/lib/s3";
 
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const body = await request.json();
+
+  try {
+    const data: Record<string, unknown> = {};
+    if ("collectionId" in body) data.collectionId = body.collectionId || null;
+
+    const coin = await prisma.coin.update({ where: { id }, data });
+    return NextResponse.json(coin);
+  } catch (error) {
+    console.error("Failed to update coin:", error);
+    return NextResponse.json(
+      { error: "Failed to update coin" },
+      { status: 500 }
+    );
+  }
+}
+
 export async function DELETE(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }

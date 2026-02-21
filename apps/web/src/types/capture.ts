@@ -1,4 +1,4 @@
-export type CaptureMode = "single" | "grid";
+export type CaptureMode = "single" | "grid" | "multi" | "numisbrief";
 
 export type FlipMode = "book" | "turn";
 
@@ -14,6 +14,12 @@ export type CaptureStep =
   | "grid_front_confirmed"
   | "grid_back_capture"
   | "grid_back_align"
+  | "multi_crop"
+  | "multi_back_capture"
+  | "multi_back_align"
+  | "numisbrief_crop"
+  | "numisbrief_back_capture"
+  | "numisbrief_back_crop"
   | "coin_entry"
   | "saving"
   | "saved";
@@ -38,11 +44,16 @@ export interface GridOverlayState {
   height: number;
 }
 
+export interface MultiCropItem {
+  id: string;
+  crop: CropRect;
+}
+
 export interface CapturedCoin {
   index: number;
   gridRow?: number;
   gridCol?: number;
-  frontCrop: CropRect;
+  frontCrop?: CropRect;
   backCrop?: CropRect;
 }
 
@@ -136,6 +147,12 @@ export interface CoinFormData {
   numistaIssues: NumistaIssueData[] | null;
   numistaPrices: NumistaPriceData | null;
   numistaRelatedTypes: NumistaRelatedType[] | null;
+
+  // Document images (base64)
+  documentImagesBase64: string[];
+
+  // Collection
+  collectionId: string | null;
 }
 
 export const EMPTY_COIN_FORM: CoinFormData = {
@@ -181,6 +198,8 @@ export const EMPTY_COIN_FORM: CoinFormData = {
   numistaIssues: null,
   numistaPrices: null,
   numistaRelatedTypes: null,
+  documentImagesBase64: [],
+  collectionId: null,
 };
 
 export interface CaptureState {
@@ -201,6 +220,12 @@ export interface CaptureState {
   coins: CapturedCoin[];
   currentCoinIndex: number;
   sessionDefaults: Partial<CoinFormData>;
+  multiCrops: MultiCropItem[];
+  multiBackCrops: MultiCropItem[];
+  selectedMultiCropId: string | null;
+  numisbriefCrop: CropRect | null;
+  numisbriefBackCrop: CropRect | null;
+  backOnly: boolean;
 }
 
 export type CaptureAction =
@@ -208,6 +233,7 @@ export type CaptureAction =
   | { type: "CAPTURE_COMPLETE"; photo: string; width: number; height: number }
   | { type: "CAPTURE_FAILED" }
   | { type: "SELECT_MODE"; mode: CaptureMode }
+  | { type: "MARK_AS_BACK" }
   | { type: "SET_SINGLE_CROP"; crop: CropRect }
   | { type: "CONFIRM_SINGLE_CROP" }
   | { type: "SINGLE_BACK_COMPLETE"; photo: string; width: number; height: number }
@@ -228,6 +254,24 @@ export type CaptureAction =
   | { type: "SKIP_BACK_CAPTURE" }
   | { type: "RETAKE_BACK" }
   | { type: "RETAKE_SINGLE_BACK" }
+  | { type: "ADD_MULTI_CROP"; crop: MultiCropItem }
+  | { type: "UPDATE_MULTI_CROP"; id: string; crop: CropRect }
+  | { type: "DELETE_MULTI_CROP"; id: string }
+  | { type: "SELECT_MULTI_CROP"; id: string | null }
+  | { type: "CONFIRM_MULTI_FRONT" }
+  | { type: "MULTI_BACK_COMPLETE"; photo: string; width: number; height: number }
+  | { type: "UPDATE_MULTI_BACK_CROP"; id: string; crop: CropRect }
+  | { type: "SELECT_MULTI_BACK_CROP"; id: string | null }
+  | { type: "CONFIRM_MULTI_BACK_ALIGN" }
+  | { type: "SKIP_MULTI_BACK" }
+  | { type: "RETAKE_MULTI_BACK" }
+  | { type: "SET_NUMISBRIEF_CROP"; crop: CropRect }
+  | { type: "CONFIRM_NUMISBRIEF_CROP" }
+  | { type: "NUMISBRIEF_BACK_COMPLETE"; photo: string; width: number; height: number }
+  | { type: "SET_NUMISBRIEF_BACK_CROP"; crop: CropRect }
+  | { type: "CONFIRM_NUMISBRIEF_BACK_CROP" }
+  | { type: "SKIP_NUMISBRIEF_BACK" }
+  | { type: "RETAKE_NUMISBRIEF_BACK" }
   | { type: "NEXT_COIN" }
   | { type: "PREV_COIN" }
   | { type: "SAVE_COIN" }

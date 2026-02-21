@@ -11,6 +11,7 @@ import type {
   CapturedCoin,
   CoinFormData,
   FlipMode,
+  MultiCropItem,
 } from "@/types/capture";
 
 const initialState: CaptureState = {
@@ -31,6 +32,12 @@ const initialState: CaptureState = {
   coins: [],
   currentCoinIndex: 0,
   sessionDefaults: {},
+  multiCrops: [],
+  multiBackCrops: [],
+  selectedMultiCropId: null,
+  numisbriefCrop: null,
+  numisbriefBackCrop: null,
+  backOnly: false,
 };
 
 function extractGridCoins(
@@ -62,6 +69,17 @@ function extractGridCoins(
   return coins;
 }
 
+function extractMultiCoins(
+  front: MultiCropItem[],
+  back: MultiCropItem[]
+): CapturedCoin[] {
+  return front.map((item, index) => ({
+    index,
+    frontCrop: item.crop,
+    backCrop: back.find((b) => b.id === item.id)?.crop,
+  }));
+}
+
 function captureReducer(
   state: CaptureState,
   action: CaptureAction
@@ -84,10 +102,19 @@ function captureReducer(
       if (state.mode === "single" && state.coins.length > 0 && !state.backPhoto) {
         return { ...state, step: "single_back_capture" };
       }
+      if (state.mode === "numisbrief" && state.coins.length > 0 && !state.backPhoto) {
+        return { ...state, step: "numisbrief_back_capture" };
+      }
       if (state.step === "capturing" && state.mode === "grid" && state.coins.length > 0) {
         return { ...state, step: "grid_back_capture" };
       }
+      if (state.step === "capturing" && state.mode === "multi" && state.multiCrops.length > 0) {
+        return { ...state, step: "multi_back_capture" };
+      }
       return { ...state, step: "idle" };
+
+    case "MARK_AS_BACK":
+      return { ...state, backOnly: true };
 
     case "SELECT_MODE":
       if (action.mode === "single") {
@@ -101,6 +128,29 @@ function captureReducer(
             width: Math.min(state.imageWidth, state.imageHeight) * 0.5,
             height: Math.min(state.imageWidth, state.imageHeight) * 0.5,
           },
+        };
+      }
+      if (action.mode === "numisbrief") {
+        return {
+          ...state,
+          step: "numisbrief_crop",
+          mode: "numisbrief",
+          numisbriefCrop: {
+            x: state.imageWidth * 0.1,
+            y: state.imageHeight * 0.1,
+            width: state.imageWidth * 0.8,
+            height: state.imageHeight * 0.8,
+          },
+        };
+      }
+      if (action.mode === "multi") {
+        return {
+          ...state,
+          step: "multi_crop",
+          mode: "multi",
+          multiCrops: [],
+          multiBackCrops: [],
+          selectedMultiCropId: null,
         };
       }
       return {
@@ -120,6 +170,21 @@ function captureReducer(
       return { ...state, singleCrop: action.crop };
 
     case "CONFIRM_SINGLE_CROP":
+      if (state.backOnly) {
+        return {
+          ...state,
+          step: "coin_entry",
+          mode: "single",
+          backPhoto: state.frontPhoto,
+          backImageWidth: state.imageWidth,
+          backImageHeight: state.imageHeight,
+          frontPhoto: null,
+          imageWidth: 0,
+          imageHeight: 0,
+          coins: [{ index: 0, backCrop: state.singleCrop! }],
+          currentCoinIndex: 0,
+        };
+      }
       return {
         ...state,
         step: "single_back_capture",
@@ -189,6 +254,25 @@ function captureReducer(
 
     case "CONFIRM_GRID_FRONT": {
       const coins = extractGridCoins(state.gridConfig!, state.gridOverlay!);
+      if (state.backOnly) {
+        const backCoins = coins.map((c) => ({
+          ...c,
+          backCrop: c.frontCrop,
+          frontCrop: undefined,
+        }));
+        return {
+          ...state,
+          step: "coin_entry",
+          coins: backCoins,
+          backPhoto: state.frontPhoto,
+          backImageWidth: state.imageWidth,
+          backImageHeight: state.imageHeight,
+          frontPhoto: null,
+          imageWidth: 0,
+          imageHeight: 0,
+          currentCoinIndex: 0,
+        };
+      }
       return {
         ...state,
         step: "grid_back_capture",
@@ -243,6 +327,200 @@ function captureReducer(
       };
     }
 
+    case "ADD_MULTI_CROP":
+      return {
+        ...state,
+        multiCrops: [...state.multiCrops, action.crop],
+        selectedMultiCropId: action.crop.id,
+      };
+
+    case "UPDATE_MULTI_CROP":
+      return {
+        ...state,
+        multiCrops: state.multiCrops.map((c) =>
+          c.id === action.id ? { ...c, crop: action.crop } : c
+        ),
+      };
+
+    case "DELETE_MULTI_CROP": {
+      const remaining = state.multiCrops.filter((c) => c.id !== action.id);
+      return {
+        ...state,
+        multiCrops: remaining,
+        selectedMultiCropId:
+          state.selectedMultiCropId === action.id
+            ? remaining.length > 0
+              ? remaining[remaining.length - 1].id
+              : null
+            : state.selectedMultiCropId,
+      };
+    }
+
+    case "SELECT_MULTI_CROP":
+      return { ...state, selectedMultiCropId: action.id };
+
+    case "CONFIRM_MULTI_FRONT": {
+      if (state.backOnly) {
+        const coins = state.multiCrops.map((item, index) => ({
+          index,
+          backCrop: item.crop,
+        }));
+        return {
+          ...state,
+          step: "coin_entry",
+          coins,
+          backPhoto: state.frontPhoto,
+          backImageWidth: state.imageWidth,
+          backImageHeight: state.imageHeight,
+          frontPhoto: null,
+          imageWidth: 0,
+          imageHeight: 0,
+          currentCoinIndex: 0,
+        };
+      }
+      const coins = extractMultiCoins(state.multiCrops, []);
+      return {
+        ...state,
+        step: "multi_back_capture",
+        coins,
+      };
+    }
+
+    case "MULTI_BACK_COMPLETE": {
+      // Initialize back crops from front crops, mirrored if book-flip
+      const backCrops: MultiCropItem[] = state.multiCrops.map((item) => ({
+        id: item.id,
+        crop:
+          state.flipMode === "book"
+            ? {
+                x: action.width - item.crop.x - item.crop.width,
+                y: item.crop.y,
+                width: item.crop.width,
+                height: item.crop.height,
+              }
+            : { ...item.crop },
+      }));
+      return {
+        ...state,
+        step: "multi_back_align",
+        backPhoto: action.photo,
+        backImageWidth: action.width,
+        backImageHeight: action.height,
+        multiBackCrops: backCrops,
+        selectedMultiCropId: backCrops.length > 0 ? backCrops[0].id : null,
+      };
+    }
+
+    case "UPDATE_MULTI_BACK_CROP":
+      return {
+        ...state,
+        multiBackCrops: state.multiBackCrops.map((c) =>
+          c.id === action.id ? { ...c, crop: action.crop } : c
+        ),
+      };
+
+    case "SELECT_MULTI_BACK_CROP":
+      return { ...state, selectedMultiCropId: action.id };
+
+    case "CONFIRM_MULTI_BACK_ALIGN": {
+      const coinsWithBack = extractMultiCoins(
+        state.multiCrops,
+        state.multiBackCrops
+      );
+      return {
+        ...state,
+        step: "coin_entry",
+        coins: coinsWithBack,
+        currentCoinIndex: 0,
+      };
+    }
+
+    case "SKIP_MULTI_BACK":
+      return {
+        ...state,
+        step: "coin_entry",
+        coins: extractMultiCoins(state.multiCrops, []),
+        currentCoinIndex: 0,
+      };
+
+    case "RETAKE_MULTI_BACK":
+      return {
+        ...state,
+        step: "multi_back_capture",
+        backPhoto: null,
+        multiBackCrops: [],
+      };
+
+    case "SET_NUMISBRIEF_CROP":
+      return { ...state, numisbriefCrop: action.crop };
+
+    case "CONFIRM_NUMISBRIEF_CROP":
+      if (state.backOnly) {
+        return {
+          ...state,
+          step: "coin_entry",
+          mode: "numisbrief",
+          backPhoto: state.frontPhoto,
+          backImageWidth: state.imageWidth,
+          backImageHeight: state.imageHeight,
+          frontPhoto: null,
+          imageWidth: 0,
+          imageHeight: 0,
+          coins: [{ index: 0, backCrop: state.numisbriefCrop! }],
+          currentCoinIndex: 0,
+        };
+      }
+      return {
+        ...state,
+        step: "numisbrief_back_capture",
+        coins: [{ index: 0, frontCrop: state.numisbriefCrop! }],
+        currentCoinIndex: 0,
+      };
+
+    case "NUMISBRIEF_BACK_COMPLETE":
+      return {
+        ...state,
+        step: "numisbrief_back_crop",
+        backPhoto: action.photo,
+        backImageWidth: action.width,
+        backImageHeight: action.height,
+        numisbriefBackCrop: {
+          x: action.width * 0.1,
+          y: action.height * 0.1,
+          width: action.width * 0.8,
+          height: action.height * 0.8,
+        },
+      };
+
+    case "SET_NUMISBRIEF_BACK_CROP":
+      return { ...state, numisbriefBackCrop: action.crop };
+
+    case "CONFIRM_NUMISBRIEF_BACK_CROP": {
+      const coinsWithBack = state.coins.map((coin) => ({
+        ...coin,
+        backCrop: state.numisbriefBackCrop!,
+      }));
+      return {
+        ...state,
+        step: "coin_entry",
+        coins: coinsWithBack,
+      };
+    }
+
+    case "SKIP_NUMISBRIEF_BACK":
+      return {
+        ...state,
+        step: "coin_entry",
+      };
+
+    case "RETAKE_NUMISBRIEF_BACK":
+      return {
+        ...state,
+        step: "numisbrief_back_capture",
+        backPhoto: null,
+        numisbriefBackCrop: null,
+      };
+
     case "ROTATE_FRONT":
       return {
         ...state,
@@ -258,6 +536,15 @@ function captureReducer(
               height: Math.min(action.width, action.height) * 0.5,
             }
           : null,
+        // Reset numisbrief crop for rotated image
+        numisbriefCrop: state.numisbriefCrop
+          ? {
+              x: action.width * 0.1,
+              y: action.height * 0.1,
+              width: action.width * 0.8,
+              height: action.height * 0.8,
+            }
+          : null,
         // Reset grid overlay for rotated image
         gridOverlay: state.gridOverlay
           ? {
@@ -267,6 +554,10 @@ function captureReducer(
               height: action.height * 0.8,
             }
           : null,
+        // Reset multi crops for rotated image
+        multiCrops: state.mode === "multi" ? [] : state.multiCrops,
+        selectedMultiCropId:
+          state.mode === "multi" ? null : state.selectedMultiCropId,
       };
 
     case "ROTATE_BACK":
@@ -283,6 +574,14 @@ function captureReducer(
               height: Math.min(action.width, action.height) * 0.5,
             }
           : null,
+        numisbriefBackCrop: state.numisbriefBackCrop
+          ? {
+              x: action.width * 0.1,
+              y: action.height * 0.1,
+              width: action.width * 0.8,
+              height: action.height * 0.8,
+            }
+          : null,
         backGridOverlay: state.backGridOverlay
           ? {
               x: action.width * 0.1,
@@ -291,6 +590,10 @@ function captureReducer(
               height: action.height * 0.8,
             }
           : null,
+        // Reset multi back crops for rotated image
+        multiBackCrops: state.mode === "multi" ? [] : state.multiBackCrops,
+        selectedMultiCropId:
+          state.mode === "multi" ? null : state.selectedMultiCropId,
       };
 
     case "SKIP_BACK_CAPTURE":

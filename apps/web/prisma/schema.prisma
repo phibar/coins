@@ -84,15 +84,45 @@ model Coin {
   numistaRelatedTypes Json? @map("numista_related_types") // [{id, title, category}]
 
   // Relations
-  images    CoinImage[]
-  session   CaptureSession? @relation(fields: [sessionId], references: [id])
-  sessionId String?         @map("session_id")
+  images       CoinImage[]
+  session      CaptureSession? @relation(fields: [sessionId], references: [id])
+  sessionId    String?         @map("session_id")
+  collection   Collection?     @relation(fields: [collectionId], references: [id])
+  collectionId String?         @map("collection_id")
 
   @@index([country])
   @@index([year])
   @@index([country, denomination, year])
   @@index([estimatedValue])
+  @@index([collectionId])
   @@map("coins")
+}
+
+model Collection {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  coins       Coin[]
+  images      CollectionImage[]
+
+  @@map("collections")
+}
+
+model CollectionImage {
+  id           String   @id @default(cuid())
+  createdAt    DateTime @default(now()) @map("created_at")
+  url          String
+  thumbnailUrl String   @map("thumbnail_url")
+  s3Key        String   @map("s3_key")
+  s3KeyThumb   String   @map("s3_key_thumb")
+  sortOrder    Int      @default(0) @map("sort_order")
+
+  collection   Collection @relation(fields: [collectionId], references: [id], onDelete: Cascade)
+  collectionId String     @map("collection_id")
+
+  @@index([collectionId])
+  @@map("collection_images")
 }
 
 model CoinImage {
@@ -143,17 +173,20 @@ model CaptureSession {
 // ──────────────────────────────────────────
 
 enum CoinCondition {
-  s     // schoen (fair)
-  ss    // sehr schoen (very fine)
-  vz    // vorzueglich (extremely fine)
-  st    // Stempelglanz (uncirculated)
-  stgl  // Stempelglanz (alternative)
-  PP    // Polierte Platte (proof)
+  G      // Good
+  VG     // Very Good
+  F      // Fine
+  VF     // Very Fine
+  XF     // Extra Fine
+  AU     // About Uncirculated
+  UNC    // Uncirculated
+  PROOF  // Polierte Platte (proof)
 }
 
 enum ImageType {
-  obverse  // Vorderseite
-  reverse  // Rueckseite
-  edge     // Rand
-  other    // Sonstiges
+  obverse      // Vorderseite
+  reverse      // Rueckseite
+  edge         // Rand
+  other        // Sonstiges
+  certificate  // Zertifikat
 }
