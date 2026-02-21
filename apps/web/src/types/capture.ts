@@ -227,6 +227,7 @@ export type CaptureAction =
   | { type: "ROTATE_BACK"; photo: string; width: number; height: number }
   | { type: "SKIP_BACK_CAPTURE" }
   | { type: "RETAKE_BACK" }
+  | { type: "RETAKE_SINGLE_BACK" }
   | { type: "NEXT_COIN" }
   | { type: "PREV_COIN" }
   | { type: "SAVE_COIN" }

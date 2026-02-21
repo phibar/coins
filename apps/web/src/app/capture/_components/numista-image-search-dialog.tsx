@@ -38,16 +38,8 @@ const ISSUER_TO_COUNTRY: Record<string, string> = {
   "union-europeenne": "EU",
 };
 
-// Map Numista experimental grade codes to German condition labels
-const GRADE_TO_CONDITION: Record<string, string> = {
-  g: "s",
-  vg: "s",
-  f: "ss",
-  vf: "ss",
-  xf: "vz",
-  au: "vz",
-  unc: "st",
-};
+// Canonical grade order (lowest to highest) — matches Numista price grades
+const GRADE_ORDER = ["G", "VG", "F", "VF", "XF", "AU", "UNC"];
 
 interface NumistaImageSearchDialogProps {
   frontImageUrl?: string;
@@ -180,9 +172,9 @@ export function NumistaImageSearchDialog({
       data.year = selectedDetail.min_year;
     }
 
-    // Condition from experimental grade
-    if (tentativeGrade && GRADE_TO_CONDITION[tentativeGrade]) {
-      data.condition = GRADE_TO_CONDITION[tentativeGrade];
+    // Condition from experimental grade (uppercase to match dropdown values)
+    if (tentativeGrade) {
+      data.condition = tentativeGrade.toUpperCase();
     }
 
     // Physical properties
@@ -263,19 +255,27 @@ export function NumistaImageSearchDialog({
         data.mintage = String(issueForMintage.mintage);
     }
 
-    // Prices + estimated value
+    // Prices + estimated value + condition default
     if (selectedDetail.prices?.prices?.length) {
       data.numistaPrices = selectedDetail.prices;
       data.estimatedCurrency = selectedDetail.prices.currency;
-      const vfPrice = selectedDetail.prices.prices.find(
-        (p) => p.grade === "VF" || p.grade === "XF"
+
+      // Set condition to lowest available grade from prices (unless experimental grade already set)
+      const lowestGrade = selectedDetail.prices.prices
+        .map((p) => p.grade)
+        .sort((a, b) => GRADE_ORDER.indexOf(a) - GRADE_ORDER.indexOf(b))[0];
+      if (lowestGrade && !data.condition) {
+        data.condition = lowestGrade;
+      }
+
+      // Use the condition's price as estimated value
+      const conditionGrade = data.condition || lowestGrade;
+      const matchingPrice = selectedDetail.prices.prices.find(
+        (p) => p.grade === conditionGrade
       );
+      const rawPrice = matchingPrice?.price ?? null;
       data.estimatedValue =
-        vfPrice?.price ||
-        selectedDetail.prices.prices[
-          Math.floor(selectedDetail.prices.prices.length / 2)
-        ]?.price ||
-        null;
+        rawPrice != null ? Math.round(rawPrice * 100) / 100 : null;
     }
 
     onSelect(data);
@@ -451,8 +451,6 @@ export function NumistaImageSearchDialog({
                           Erhaltung:{" "}
                           <span className="font-medium uppercase">
                             {tentativeGrade}
-                            {GRADE_TO_CONDITION[tentativeGrade] &&
-                              ` → ${GRADE_TO_CONDITION[tentativeGrade]}`}
                           </span>
                         </span>
                       )}

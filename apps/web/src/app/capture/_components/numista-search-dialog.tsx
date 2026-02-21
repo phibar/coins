@@ -261,20 +261,27 @@ export function NumistaSearchDialog({
       if (firstIssue.mintage) data.mintage = String(firstIssue.mintage);
     }
 
-    // Prices + estimated value
+    // Prices + estimated value + condition
     if (selectedDetail.prices?.prices?.length) {
       data.numistaPrices = selectedDetail.prices;
       data.estimatedCurrency = selectedDetail.prices.currency;
-      // Pick VF or XF price as default estimated value, or middle grade
-      const vfPrice = selectedDetail.prices.prices.find(
-        (p) => p.grade === "VF" || p.grade === "XF"
-      );
-      data.estimatedValue =
-        vfPrice?.price ||
-        selectedDetail.prices.prices[
-          Math.floor(selectedDetail.prices.prices.length / 2)
-        ]?.price ||
-        null;
+
+      // Set condition to the lowest grade from prices
+      const gradeOrder = ["G", "VG", "F", "VF", "XF", "AU", "UNC"];
+      const lowestGrade = selectedDetail.prices.prices
+        .map((p) => p.grade)
+        .sort((a, b) => gradeOrder.indexOf(a) - gradeOrder.indexOf(b))[0];
+      if (lowestGrade) {
+        data.condition = lowestGrade;
+        // Use the lowest grade's price as estimated value
+        const lowestPrice = selectedDetail.prices.prices.find(
+          (p) => p.grade === lowestGrade
+        );
+        data.estimatedValue =
+          lowestPrice?.price != null
+            ? Math.round(lowestPrice.price * 100) / 100
+            : null;
+      }
     }
 
     // notes is NOT populated with Numista data anymore — reserved for user notes only

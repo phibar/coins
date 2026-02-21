@@ -12,6 +12,14 @@ import type { CoinFormData, CropRect } from "@/types/capture";
 import { toast } from "sonner";
 import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
 
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="ml-1.5 inline-flex h-5 min-w-5 items-center justify-center rounded border border-border/50 bg-muted/50 px-1 text-[10px] font-mono text-muted-foreground">
+      {children}
+    </kbd>
+  );
+}
+
 export default function CapturePage() {
   const { state, dispatch, capturePhoto, captureBackPhoto, loadTestImage } = useCaptureSession();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -442,6 +450,141 @@ export default function CapturePage() {
         state.gridConfig.emptySlots.length
       : 0;
 
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      // Skip if user is typing in an input/textarea/select
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      // Skip if a dialog is open
+      if (document.querySelector("[role=dialog]")) return;
+
+      const step = state.step;
+
+      if (step === "idle") {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          capturePhoto();
+        } else if (e.key === "l" || e.key === "L") {
+          e.preventDefault();
+          fileInputRef.current?.click();
+        }
+      } else if (step === "select_mode") {
+        if (e.key === "a" || e.key === "A") {
+          e.preventDefault();
+          if (!detecting) handleAutoDetect();
+        } else if (e.key === "1") {
+          e.preventDefault();
+          dispatch({ type: "SELECT_MODE", mode: "single" });
+        } else if (e.key === "2") {
+          e.preventDefault();
+          dispatch({ type: "SELECT_MODE", mode: "grid" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "single_crop") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_SINGLE_CROP" });
+        } else if (e.key === "a" || e.key === "A") {
+          e.preventDefault();
+          if (!detecting) handleAutoDetectSingle();
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateFront();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "single_back_capture") {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          captureBackPhoto();
+        } else if (e.key === "l" || e.key === "L") {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_SINGLE_BACK" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "single_back_crop") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_SINGLE_BACK_CROP" });
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_SINGLE_BACK" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RETAKE_SINGLE_BACK" });
+        }
+      } else if (step === "grid_config") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (gridCoinCount > 0) dispatch({ type: "CONFIRM_GRID_FRONT" });
+        } else if (e.key === "a" || e.key === "A") {
+          e.preventDefault();
+          if (!detecting) handleAutoDetectGrid();
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateFront();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "grid_back_capture") {
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          handleCaptureBack();
+        } else if (e.key === "l" || e.key === "L") {
+          e.preventDefault();
+          backFileInputRef.current?.click();
+        } else if (e.key === "s" || e.key === "S") {
+          e.preventDefault();
+          dispatch({ type: "SKIP_BACK_CAPTURE" });
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RESET" });
+        }
+      } else if (step === "grid_back_align") {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          dispatch({ type: "CONFIRM_BACK_GRID_ALIGN" });
+        } else if (e.key === "r" || e.key === "R") {
+          e.preventDefault();
+          if (!rotating) handleRotateBack();
+        } else if (e.key === "Escape") {
+          e.preventDefault();
+          dispatch({ type: "RETAKE_BACK" });
+        }
+      } else if (step === "saved") {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          dispatch({ type: "CONTINUE_WITH_SESSION" });
+        } else if (e.key === "n" || e.key === "N") {
+          e.preventDefault();
+          dispatch({ type: "START_FRESH" });
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [
+    state.step, detecting, rotating, gridCoinCount,
+    capturePhoto, captureBackPhoto, handleAutoDetect,
+    handleAutoDetectSingle, handleAutoDetectGrid,
+    handleRotateFront, handleRotateBack, handleCaptureBack,
+    dispatch,
+  ]);
+
   return (
     <div className="container mx-auto px-4 py-8">
       <h1 className="mb-6 text-3xl font-bold">Münzen erfassen</h1>
@@ -450,7 +593,7 @@ export default function CapturePage() {
       {state.step === "idle" && (
         <div className="flex gap-4">
           <Button size="lg" onClick={capturePhoto}>
-            Foto aufnehmen
+            Foto aufnehmen<Kbd>↵</Kbd>
           </Button>
           <div>
             <input
@@ -465,7 +608,7 @@ export default function CapturePage() {
               variant="outline"
               onClick={() => fileInputRef.current?.click()}
             >
-              Bild laden (Test)
+              Bild laden<Kbd>L</Kbd>
             </Button>
           </div>
         </div>
@@ -488,7 +631,7 @@ export default function CapturePage() {
               onClick={handleAutoDetect}
               disabled={detecting}
             >
-              {detecting ? "Erkennung..." : "Auto-Erkennung"}
+              {detecting ? "Erkennung..." : <>Auto-Erkennung<Kbd>A</Kbd></>}
             </Button>
             <Button
               size="lg"
@@ -497,7 +640,7 @@ export default function CapturePage() {
                 dispatch({ type: "SELECT_MODE", mode: "single" })
               }
             >
-              Einzelmünze
+              Einzelmünze<Kbd>1</Kbd>
             </Button>
             <Button
               size="lg"
@@ -506,7 +649,14 @@ export default function CapturePage() {
                 dispatch({ type: "SELECT_MODE", mode: "grid" })
               }
             >
-              Grid / Münzseite
+              Grid / Münzseite<Kbd>2</Kbd>
+            </Button>
+            <Button
+              size="lg"
+              variant="ghost"
+              onClick={() => dispatch({ type: "RESET" })}
+            >
+              Neu aufnehmen<Kbd>Esc</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -533,7 +683,7 @@ export default function CapturePage() {
                   onClick={handleAutoDetectSingle}
                   disabled={detecting}
                 >
-                  {detecting ? "..." : "Auto"}
+                  {detecting ? "..." : <>Auto<Kbd>A</Kbd></>}
                 </Button>
                 <Button
                   variant="secondary"
@@ -541,20 +691,20 @@ export default function CapturePage() {
                   onClick={handleRotateFront}
                   disabled={rotating}
                 >
-                  Drehen 90°
+                  Drehen<Kbd>R</Kbd>
                 </Button>
                 <Button
-                  variant="outline"
+                  variant="ghost"
                   onClick={() => dispatch({ type: "RESET" })}
                 >
-                  Abbrechen
+                  Neu aufnehmen<Kbd>Esc</Kbd>
                 </Button>
                 <Button
                   onClick={() =>
                     dispatch({ type: "CONFIRM_SINGLE_CROP" })
                   }
                 >
-                  Bestätigen
+                  Bestätigen<Kbd>↵</Kbd>
                 </Button>
               </div>
             </div>
@@ -581,7 +731,7 @@ export default function CapturePage() {
           </p>
           <div className="flex gap-4">
             <Button size="lg" onClick={captureBackPhoto}>
-              Rückseite fotografieren
+              Rückseite fotografieren<Kbd>↵</Kbd>
             </Button>
             <div>
               <input
@@ -596,14 +746,20 @@ export default function CapturePage() {
                 variant="outline"
                 onClick={() => backFileInputRef.current?.click()}
               >
-                Bild laden (Test)
+                Bild laden<Kbd>L</Kbd>
               </Button>
             </div>
             <Button
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
             >
-              Ohne Rückseite fortfahren
+              Überspringen<Kbd>S</Kbd>
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => dispatch({ type: "RESET" })}
+            >
+              Neu aufnehmen<Kbd>Esc</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -637,20 +793,28 @@ export default function CapturePage() {
                   onClick={handleRotateBack}
                   disabled={rotating}
                 >
-                  Drehen 90°
+                  Drehen<Kbd>R</Kbd>
                 </Button>
                 <Button
-                  variant="outline"
+                  variant="ghost"
+                  onClick={() =>
+                    dispatch({ type: "RETAKE_SINGLE_BACK" })
+                  }
+                >
+                  Rückseite neu<Kbd>Esc</Kbd>
+                </Button>
+                <Button
+                  variant="ghost"
                   onClick={() => dispatch({ type: "SKIP_SINGLE_BACK" })}
                 >
-                  Ohne Rückseite
+                  Ohne Rückseite<Kbd>S</Kbd>
                 </Button>
                 <Button
                   onClick={() =>
                     dispatch({ type: "CONFIRM_SINGLE_BACK_CROP" })
                   }
                 >
-                  Bestätigen
+                  Bestätigen<Kbd>↵</Kbd>
                 </Button>
               </div>
             </div>
@@ -681,7 +845,7 @@ export default function CapturePage() {
                 onClick={handleRotateFront}
                 disabled={rotating}
               >
-                Drehen 90°
+                Drehen<Kbd>R</Kbd>
               </Button>
             </div>
             <div className="grid gap-6 lg:grid-cols-[1fr_300px]">
@@ -734,7 +898,7 @@ export default function CapturePage() {
           </p>
           <div className="flex gap-4">
             <Button size="lg" onClick={handleCaptureBack}>
-              Rückseite fotografieren
+              Rückseite fotografieren<Kbd>↵</Kbd>
             </Button>
             <div>
               <input
@@ -749,14 +913,20 @@ export default function CapturePage() {
                 variant="outline"
                 onClick={() => backFileInputRef.current?.click()}
               >
-                Bild laden (Test)
+                Bild laden<Kbd>L</Kbd>
               </Button>
             </div>
             <Button
               variant="ghost"
               onClick={() => dispatch({ type: "SKIP_BACK_CAPTURE" })}
             >
-              Ohne Rückseite fortfahren
+              Überspringen<Kbd>S</Kbd>
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => dispatch({ type: "RESET" })}
+            >
+              Neu aufnehmen<Kbd>Esc</Kbd>
             </Button>
           </div>
           {state.frontPhoto && (
@@ -790,7 +960,7 @@ export default function CapturePage() {
                 onClick={handleRotateBack}
                 disabled={rotating}
               >
-                Drehen 90°
+                Drehen<Kbd>R</Kbd>
               </Button>
             </div>
             <p className="text-muted-foreground">
@@ -821,13 +991,13 @@ export default function CapturePage() {
                       dispatch({ type: "CONFIRM_BACK_GRID_ALIGN" })
                     }
                   >
-                    Bestätigen & Münzen bearbeiten
+                    Bestätigen<Kbd>↵</Kbd>
                   </Button>
                   <Button
                     variant="outline"
                     onClick={() => dispatch({ type: "RETAKE_BACK" })}
                   >
-                    Nochmal aufnehmen
+                    Rückseite neu<Kbd>Esc</Kbd>
                   </Button>
                 </div>
               </div>
@@ -902,13 +1072,13 @@ export default function CapturePage() {
                 dispatch({ type: "CONTINUE_WITH_SESSION" })
               }
             >
-              Weiter mit gleichen Einstellungen
+              Weiter mit gleichen Einstellungen<Kbd>↵</Kbd>
             </Button>
             <Button
               variant="outline"
               onClick={() => dispatch({ type: "START_FRESH" })}
             >
-              Neu (leere Eingabe)
+              Neu (leere Eingabe)<Kbd>N</Kbd>
             </Button>
           </div>
         </div>

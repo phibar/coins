@@ -308,6 +308,14 @@ function captureReducer(
         backGridOverlay: null,
       };
 
+    case "RETAKE_SINGLE_BACK":
+      return {
+        ...state,
+        step: "single_back_capture",
+        backPhoto: null,
+        singleBackCrop: null,
+      };
+
     case "NEXT_COIN":
       if (state.currentCoinIndex < state.coins.length - 1) {
         return {

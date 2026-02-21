@@ -17,14 +17,17 @@ import type { CoinFormData } from "@/types/capture";
 import { EMPTY_COIN_FORM } from "@/types/capture";
 import { NumistaSearchDialog } from "./numista-search-dialog";
 import { NumistaImageSearchDialog } from "./numista-image-search-dialog";
+import { ZoomablePreview } from "./zoomable-preview";
 
 const CONDITION_OPTIONS = [
-  { value: "s", label: "s - schön" },
-  { value: "ss", label: "ss - sehr schön" },
-  { value: "vz", label: "vz - vorzüglich" },
-  { value: "st", label: "st - Stempelglanz" },
-  { value: "stgl", label: "stgl - Stempelglanz" },
-  { value: "PP", label: "PP - Polierte Platte" },
+  { value: "G", label: "G - Good" },
+  { value: "VG", label: "VG - Very Good" },
+  { value: "F", label: "F - Fine" },
+  { value: "VF", label: "VF - Very Fine" },
+  { value: "XF", label: "XF - Extra Fine" },
+  { value: "AU", label: "AU - About Uncirculated" },
+  { value: "UNC", label: "UNC - Uncirculated" },
+  { value: "PROOF", label: "PROOF - Polierte Platte" },
 ];
 
 interface CoinFormProps {
@@ -82,30 +85,18 @@ export function CoinForm({
       {(frontImageUrl || backImageUrl) && (
         <div className="flex gap-4">
           {frontImageUrl && (
-            <div className="flex-1">
-              <Label className="mb-1 text-xs text-muted-foreground">
-                Vorderseite
-              </Label>
-              <img
-                src={frontImageUrl}
-                alt="Vorderseite"
-                className="w-full rounded-lg border object-cover"
-                style={{ maxHeight: 300 }}
-              />
-            </div>
+            <ZoomablePreview
+              src={frontImageUrl}
+              alt="Vorderseite"
+              label="Vorderseite"
+            />
           )}
           {backImageUrl && (
-            <div className="flex-1">
-              <Label className="mb-1 text-xs text-muted-foreground">
-                Rückseite
-              </Label>
-              <img
-                src={backImageUrl}
-                alt="Rückseite"
-                className="w-full rounded-lg border object-cover"
-                style={{ maxHeight: 300 }}
-              />
-            </div>
+            <ZoomablePreview
+              src={backImageUrl}
+              alt="Rückseite"
+              label="Rückseite"
+            />
           )}
         </div>
       )}
