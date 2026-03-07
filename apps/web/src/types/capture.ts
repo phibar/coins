@@ -98,9 +98,12 @@ export interface NumistaRelatedType {
 }
 
 export interface CoinFormData {
+  itemType: "coin" | "ersttagsbrief";
   country: string;
   denomination: string;
   year: number | null;
+  description: string;
+  count: number | null;
   mintMark: string;
   material: string;
   fineness: string;
@@ -158,9 +161,12 @@ export interface CoinFormData {
 }
 
 export const EMPTY_COIN_FORM: CoinFormData = {
+  itemType: "coin",
   country: "",
   denomination: "",
   year: null,
+  description: "",
+  count: null,
   mintMark: "",
   material: "",
   fineness: "",

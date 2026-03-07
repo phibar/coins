@@ -1,18 +1,48 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const navItems = [
   { href: "/", label: "Start" },
   { href: "/capture", label: "Erfassen" },
   { href: "/collection", label: "Sammlung" },
+  { href: "/ersttagsbriefe", label: "Ersttagsbriefe" },
   { href: "/settings", label: "Einstellungen" },
 ];
 
 export function AppNav() {
   const pathname = usePathname();
+  const router = useRouter();
+  const [pendingScanCount, setPendingScanCount] = useState(0);
+
+  // Poll for pending scans
+  useEffect(() => {
+    const poll = async () => {
+      try {
+        const res = await fetch("/api/scanner/pending");
+        const data = await res.json();
+        const prev = pendingScanCount;
+        setPendingScanCount(data.count);
+
+        // Auto-navigate to capture page when new scans arrive
+        if (
+          data.count > 0 &&
+          prev === 0 &&
+          !pathname.startsWith("/ersttagsbriefe/erfassen")
+        ) {
+          router.push("/ersttagsbriefe/erfassen");
+        }
+      } catch {
+        setPendingScanCount(0);
+      }
+    };
+    poll();
+    const interval = setInterval(poll, 2000);
+    return () => clearInterval(interval);
+  }, [pathname, router, pendingScanCount]);
 
   return (
     <header className="border-b">
@@ -26,13 +56,18 @@ export function AppNav() {
               key={item.href}
               href={item.href}
               className={cn(
-                "text-sm font-medium transition-colors hover:text-foreground/80",
+                "relative text-sm font-medium transition-colors hover:text-foreground/80",
                 pathname === item.href || (item.href !== "/" && pathname.startsWith(item.href))
                   ? "text-foreground"
                   : "text-foreground/60"
               )}
             >
               {item.label}
+              {item.href === "/ersttagsbriefe" && pendingScanCount > 0 && (
+                <span className="absolute -right-3 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                  {pendingScanCount}
+                </span>
+              )}
             </Link>
           ))}
         </nav>

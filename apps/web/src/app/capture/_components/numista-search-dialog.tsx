@@ -137,7 +137,27 @@ export function NumistaSearchDialog({
 
   const performSearch = useCallback(
     async (q: string, iss: string, yr: string) => {
-      if (q.length < 2) {
+      const trimmed = q.trim();
+
+      // Direct ID lookup: if query is a plain number, fetch type detail directly
+      if (/^\d+$/.test(trimmed)) {
+        setLoading(true);
+        setSelectedIndex(-1);
+        setResults([]);
+        try {
+          const response = await fetch(`/api/numista/type/${trimmed}`);
+          if (!response.ok) throw new Error("Type not found");
+          const detail: NumistaDetailResponse = await response.json();
+          setSelectedDetail(detail);
+        } catch {
+          setSelectedDetail(null);
+        } finally {
+          setLoading(false);
+        }
+        return;
+      }
+
+      if (trimmed.length < 2) {
         setResults([]);
         return;
       }
@@ -145,7 +165,7 @@ export function NumistaSearchDialog({
       setLoading(true);
       setSelectedIndex(-1);
       try {
-        const params = new URLSearchParams({ q });
+        const params = new URLSearchParams({ q: trimmed });
         if (iss) params.set("issuer", iss);
         if (yr) params.set("year", yr);
 
@@ -384,7 +404,7 @@ export function NumistaSearchDialog({
                   performSearch(query, issuer, year);
                 }
               }}
-              placeholder="z.B. 5 Mark, 10 Euro, 1 Pfennig..."
+              placeholder="z.B. 5 Mark, 10 Euro oder Numista-ID (12345)..."
               autoFocus
             />
           </div>
@@ -439,7 +459,7 @@ export function NumistaSearchDialog({
               type="button"
               size="sm"
               onClick={() => performSearch(query, issuer, year)}
-              disabled={loading || query.length < 2}
+              disabled={loading || (query.trim().length < 2 && !/^\d+$/.test(query.trim()))}
             >
               Suchen
             </Button>
@@ -455,7 +475,7 @@ export function NumistaSearchDialog({
             </div>
           )}
 
-          {!loading && results.length === 0 && query.length >= 2 && (
+          {!loading && results.length === 0 && !selectedDetail && query.trim().length >= 2 && (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Keine Ergebnisse gefunden.
             </p>

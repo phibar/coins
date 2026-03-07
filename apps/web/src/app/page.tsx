@@ -80,6 +80,7 @@ export default async function DashboardPage() {
   // Group years into decades for the chart
   const decadeMap = new Map<string, number>();
   for (const ys of yearStats) {
+    if (!ys.year) continue;
     const decade = `${Math.floor(ys.year / 10) * 10}er`;
     decadeMap.set(decade, (decadeMap.get(decade) || 0) + ys._count._all);
   }
@@ -89,10 +90,12 @@ export default async function DashboardPage() {
   }));
 
   // Country data for pie chart
-  const countryData = countryStats.map((cs) => ({
-    name: cs.country,
-    value: cs._count._all,
-  }));
+  const countryData = countryStats
+    .filter((cs) => cs.country !== null)
+    .map((cs) => ({
+      name: cs.country!,
+      value: cs._count._all,
+    }));
 
   // Condition data for pie chart
   const conditionsWithData = conditionStats.filter((c) => c.condition !== null);
@@ -264,13 +267,13 @@ export default async function DashboardPage() {
                         {thumb ? (
                           <img
                             src={thumb.thumbnailUrl}
-                            alt={coin.denomination}
+                            alt={coin.denomination ?? ""}
                             className="mb-2 aspect-square w-full rounded object-cover"
                           />
                         ) : coin.numistaObverseThumbnail ? (
                           <img
                             src={coin.numistaObverseThumbnail}
-                            alt={coin.denomination}
+                            alt={coin.denomination ?? ""}
                             className="mb-2 aspect-square w-full rounded object-cover opacity-70"
                           />
                         ) : (

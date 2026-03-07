@@ -378,7 +378,6 @@ export default function CapturePage() {
 
         toast.success("Münze gespeichert!");
         dispatch({ type: "SET_SESSION_DEFAULTS", defaults: formData });
-        dispatch({ type: "COIN_SAVED" });
         return true;
       } catch {
         toast.error("Fehler beim Speichern");

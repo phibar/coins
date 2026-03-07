@@ -2,9 +2,10 @@ import Link from "next/link";
 
 interface CoinWithImage {
   id: string;
-  country: string;
-  denomination: string;
-  year: number;
+  country: string | null;
+  denomination: string | null;
+  year: number | null;
+  description: string | null;
   mintMark: string | null;
   condition: string | null;
   images: { thumbnailUrl: string }[];
@@ -51,11 +52,10 @@ export function CollectionGrid({ coins }: CollectionGridProps) {
           </div>
           <div className="mt-2 space-y-0.5">
             <p className="truncate text-sm font-medium">
-              {coin.denomination}
+              {coin.denomination || coin.description || "–"}
             </p>
             <p className="truncate text-xs text-muted-foreground">
-              {coin.country} {coin.year}
-              {coin.mintMark && ` ${coin.mintMark}`}
+              {[coin.country, coin.year, coin.mintMark].filter(Boolean).join(" ") || ""}
             </p>
             {coin.condition && (
               <p className="text-xs text-muted-foreground">

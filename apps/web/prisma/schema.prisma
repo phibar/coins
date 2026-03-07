@@ -16,10 +16,17 @@ model Coin {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
 
-  // Required fields
-  country     String
-  denomination String
-  year        Int
+  // Item type
+  itemType ItemType @default(coin) @map("item_type")
+
+  // Basic fields (all optional for flexibility)
+  country      String?
+  denomination String?
+  year         Int?
+
+  // Description & count (for sheets, bulk groups, Ersttagsbriefe)
+  description String?
+  count       Int?    @default(1)
 
   // Optional identification
   mintMark String? @map("mint_mark")
@@ -93,6 +100,7 @@ model Coin {
   collection   Collection?     @relation(fields: [collectionId], references: [id])
   collectionId String?         @map("collection_id")
 
+  @@index([itemType])
   @@index([country])
   @@index([year])
   @@index([country, denomination, year])
@@ -184,6 +192,11 @@ enum CoinCondition {
   AU     // About Uncirculated
   UNC    // Uncirculated
   PROOF  // Polierte Platte (proof)
+}
+
+enum ItemType {
+  coin           // Muenze
+  ersttagsbrief  // Ersttagsbrief (First Day Cover)
 }
 
 enum ImageType {

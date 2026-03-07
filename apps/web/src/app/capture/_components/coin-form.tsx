@@ -456,35 +456,54 @@ export function CoinForm({
         </div>
       )}
 
-      {/* Required fields */}
+      {/* Basic fields */}
       <div className="space-y-4">
         <h3 className="text-sm font-semibold uppercase text-muted-foreground">
-          Pflichtfelder
+          Grunddaten
         </h3>
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <Label htmlFor="country">Land *</Label>
+            <Label htmlFor="country">Land</Label>
             <Input
               id="country"
-              {...register("country", { required: true })}
+              {...register("country")}
               placeholder="z.B. Deutschland"
             />
           </div>
           <div>
-            <Label htmlFor="denomination">Nominal *</Label>
+            <Label htmlFor="denomination">Nominal</Label>
             <Input
               id="denomination"
-              {...register("denomination", { required: true })}
+              {...register("denomination")}
               placeholder="z.B. 1 DM"
             />
           </div>
           <div>
-            <Label htmlFor="year">Prägejahr *</Label>
+            <Label htmlFor="year">Prägejahr</Label>
             <Input
               id="year"
               type="number"
-              {...register("year", { required: true, valueAsNumber: true })}
+              {...register("year", { valueAsNumber: true })}
               placeholder="z.B. 1970"
+            />
+          </div>
+        </div>
+        <div className="grid grid-cols-3 gap-4">
+          <div className="col-span-2">
+            <Label htmlFor="description">Beschreibung</Label>
+            <Input
+              id="description"
+              {...register("description")}
+              placeholder="z.B. 50 Pfennig Bogen, Ersttagsbrief..."
+            />
+          </div>
+          <div>
+            <Label htmlFor="count">Anzahl</Label>
+            <Input
+              id="count"
+              type="number"
+              {...register("count", { valueAsNumber: true })}
+              placeholder="z.B. 20"
             />
           </div>
         </div>

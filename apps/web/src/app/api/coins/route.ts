@@ -4,7 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { cropImage, generateThumbnail } from "@/lib/image-processing";
 import { uploadToS3 } from "@/lib/s3";
 import { addToNumistaCollection } from "@/lib/numista";
-import type { CoinCondition } from "@/generated/prisma/client";
+import type { CoinCondition, ItemType } from "@/generated/prisma/client";
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,9 +21,12 @@ export async function POST(request: NextRequest) {
     // Create coin in DB
     const coin = await prisma.coin.create({
       data: {
-        country: formData.country,
-        denomination: formData.denomination,
-        year: formData.year,
+        itemType: (formData.itemType as ItemType) || "coin",
+        country: formData.country || null,
+        denomination: formData.denomination || null,
+        year: formData.year || null,
+        description: formData.description || null,
+        count: formData.count ? parseInt(String(formData.count)) : null,
         mintMark: formData.mintMark || null,
         material: formData.material || null,
         fineness: formData.fineness ? parseFloat(formData.fineness) : null,
@@ -222,10 +225,13 @@ export async function GET(request: NextRequest) {
   const isProof = searchParams.get("isProof");
   const hasCase = searchParams.get("hasCase");
   const hasCertificate = searchParams.get("hasCertificate");
+  const itemType = searchParams.get("itemType");
   const q = searchParams.get("q");
 
   const where: Record<string, unknown> = {};
 
+  if (itemType) where.itemType = itemType;
+  else where.itemType = "coin"; // Default to coins only
   if (country) where.country = country;
   if (denomination) where.denomination = { contains: denomination, mode: "insensitive" };
   if (year) where.year = parseInt(year);
@@ -244,6 +250,7 @@ export async function GET(request: NextRequest) {
       { denomination: { contains: q, mode: "insensitive" } },
       { numistaTitle: { contains: q, mode: "insensitive" } },
       { notes: { contains: q, mode: "insensitive" } },
+      { description: { contains: q, mode: "insensitive" } },
       { series: { contains: q, mode: "insensitive" } },
     ];
   }

@@ -47,6 +47,23 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
 
   if (!coin) notFound();
 
+  const [prevCoin, nextCoin] = await Promise.all([
+    prisma.coin.findFirst({
+      where: { itemType: coin.itemType, createdAt: { gt: coin.createdAt } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, denomination: true, description: true, year: true },
+    }),
+    prisma.coin.findFirst({
+      where: { itemType: coin.itemType, createdAt: { lt: coin.createdAt } },
+      orderBy: { createdAt: "desc" },
+      select: { id: true, denomination: true, description: true, year: true },
+    }),
+  ]);
+
+  const isErsttagsbrief = coin.itemType === "ersttagsbrief";
+  const backUrl = isErsttagsbrief ? "/ersttagsbriefe" : "/collection";
+  const backLabel = isErsttagsbrief ? "Zurück zu Ersttagsbriefen" : "Zurück zur Sammlung";
+
   const obverse = coin.images.find((i) => i.type === "obverse");
   const reverse = coin.images.find((i) => i.type === "reverse");
   const documents = coin.images.filter((i) => i.type === "certificate");
@@ -66,18 +83,39 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
       {/* Navigation */}
       <div className="mb-6 flex items-center justify-between">
         <Button variant="ghost" size="sm" asChild>
-          <Link href="/collection">&larr; Zurück zur Sammlung</Link>
+          <Link href={backUrl}>&larr; {backLabel}</Link>
         </Button>
-        <DeleteCoinButton coinId={coin.id} />
+        <div className="flex items-center gap-2">
+          {prevCoin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/collection/${prevCoin.id}`}>
+                &larr; {prevCoin.denomination || prevCoin.description || ""} {prevCoin.year || ""}
+              </Link>
+            </Button>
+          )}
+          {nextCoin && (
+            <Button variant="outline" size="sm" asChild>
+              <Link href={`/collection/${nextCoin.id}`}>
+                {nextCoin.denomination || nextCoin.description || ""} {nextCoin.year || ""} &rarr;
+              </Link>
+            </Button>
+          )}
+          <DeleteCoinButton coinId={coin.id} />
+        </div>
       </div>
 
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold">{coin.denomination}</h1>
+        <h1 className="text-2xl font-bold">{coin.denomination || coin.description || "Unbenannt"}</h1>
         <p className="text-lg text-muted-foreground">
-          {coin.country} {coin.year}
-          {coin.mintMark && ` (${coin.mintMark})`}
+          {[coin.country, coin.year, coin.mintMark && `(${coin.mintMark})`].filter(Boolean).join(" ")}
         </p>
+        {coin.description && coin.denomination && (
+          <p className="text-muted-foreground">{coin.description}</p>
+        )}
+        {coin.count && coin.count > 1 && (
+          <p className="text-sm text-muted-foreground">Anzahl: {coin.count}</p>
+        )}
         {coin.numistaUrl && (
           <a
             href={coin.numistaUrl}
@@ -226,7 +264,9 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
           <div className="space-y-2 text-sm">
             <DetailRow label="Land" value={coin.country} />
             <DetailRow label="Nominal" value={coin.denomination} />
-            <DetailRow label="Prägejahr" value={String(coin.year)} />
+            <DetailRow label="Prägejahr" value={coin.year ? String(coin.year) : null} />
+            <DetailRow label="Beschreibung" value={coin.description} />
+            <DetailRow label="Anzahl" value={coin.count && coin.count > 1 ? String(coin.count) : null} />
             <DetailRow label="Prägeanstalt" value={coin.mintMark} />
             <DetailRow label="Material" value={coin.material} />
             <DetailRow
