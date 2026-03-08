@@ -197,6 +197,7 @@ enum CoinCondition {
 enum ItemType {
   coin           // Muenze
   ersttagsbrief  // Ersttagsbrief (First Day Cover)
+  banknote       // Banknote
 }
 
 enum ImageType {

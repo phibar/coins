@@ -6,6 +6,28 @@ import { uploadToS3 } from "@/lib/s3";
 import { addToNumistaCollection } from "@/lib/numista";
 import type { CoinCondition, ItemType } from "@/generated/prisma/client";
 
+// Map German grade names (from Numista lang=de) to CoinCondition enum values
+const GRADE_TO_CONDITION: Record<string, string> = {
+  Gut: "G",
+  "Sehr gut": "VG",
+  "Schön": "F",
+  "Sehr Schön": "VF",
+  "Vorzüglich": "XF",
+  "Fast unzirkuliert": "AU",
+  "Prägefrisch": "UNC",
+};
+
+function normalizeCondition(value: string | null | undefined): CoinCondition | null {
+  if (!value) return null;
+  // Already a valid enum value?
+  const validValues = ["G", "VG", "F", "VF", "XF", "AU", "UNC", "PROOF"];
+  if (validValues.includes(value)) return value as CoinCondition;
+  // Try German name mapping
+  const mapped = GRADE_TO_CONDITION[value];
+  if (mapped) return mapped as CoinCondition;
+  return null;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -33,7 +55,7 @@ export async function POST(request: NextRequest) {
         weight: formData.weight ? parseFloat(formData.weight) : null,
         diameter: formData.diameter ? parseFloat(formData.diameter) : null,
         thickness: formData.thickness ? parseFloat(formData.thickness) : null,
-        condition: (formData.condition as CoinCondition) || null,
+        condition: normalizeCondition(formData.condition),
         isProof: formData.isProof || false,
         isFirstDay: formData.isFirstDay || false,
         hasCase: formData.hasCase || false,

@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
 
 const navItems = [
@@ -10,12 +10,12 @@ const navItems = [
   { href: "/capture", label: "Erfassen" },
   { href: "/collection", label: "Sammlung" },
   { href: "/ersttagsbriefe", label: "Ersttagsbriefe" },
+  { href: "/banknoten", label: "Banknoten" },
   { href: "/settings", label: "Einstellungen" },
 ];
 
 export function AppNav() {
   const pathname = usePathname();
-  const router = useRouter();
   const [pendingScanCount, setPendingScanCount] = useState(0);
 
   // Poll for pending scans
@@ -24,17 +24,7 @@ export function AppNav() {
       try {
         const res = await fetch("/api/scanner/pending");
         const data = await res.json();
-        const prev = pendingScanCount;
         setPendingScanCount(data.count);
-
-        // Auto-navigate to capture page when new scans arrive
-        if (
-          data.count > 0 &&
-          prev === 0 &&
-          !pathname.startsWith("/ersttagsbriefe/erfassen")
-        ) {
-          router.push("/ersttagsbriefe/erfassen");
-        }
       } catch {
         setPendingScanCount(0);
       }
@@ -42,7 +32,7 @@ export function AppNav() {
     poll();
     const interval = setInterval(poll, 2000);
     return () => clearInterval(interval);
-  }, [pathname, router, pendingScanCount]);
+  }, [pathname, pendingScanCount]);
 
   return (
     <header className="border-b">
@@ -63,7 +53,7 @@ export function AppNav() {
               )}
             >
               {item.label}
-              {item.href === "/ersttagsbriefe" && pendingScanCount > 0 && (
+              {(item.href === "/ersttagsbriefe" || item.href === "/banknoten") && pendingScanCount > 0 && (
                 <span className="absolute -right-3 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
                   {pendingScanCount}
                 </span>

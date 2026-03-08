@@ -51,7 +51,8 @@ export async function POST(request: NextRequest) {
       images.map((i) => i.image_data.length)
     );
 
-    const result = await searchByImage(images);
+    const category = (formData.get("category") as string) || "coin";
+    const result = await searchByImage(images, 20, category);
     return NextResponse.json(result);
   } catch (error) {
     console.error("Numista image search failed:", error);

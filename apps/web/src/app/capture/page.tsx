@@ -60,6 +60,14 @@ export default function CapturePage() {
   const [savedCoinIndices, setSavedCoinIndices] = useState<Set<number>>(new Set());
   const [skippedCoinIndices, setSkippedCoinIndices] = useState<Set<number>>(new Set());
 
+  // Reset tracking sets when session resets (state goes back to idle)
+  useEffect(() => {
+    if (state.step === "idle") {
+      setSavedCoinIndices(new Set());
+      setSkippedCoinIndices(new Set());
+    }
+  }, [state.step]);
+
   useEffect(() => {
     const check = async () => {
       try {

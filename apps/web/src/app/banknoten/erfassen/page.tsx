@@ -8,15 +8,19 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PhotoCanvas } from "@/app/capture/_components/photo-canvas";
 import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
-import type { CropRect } from "@/types/capture";
+import { NumistaSearchDialog } from "@/app/capture/_components/numista-search-dialog";
+import { NumistaImageSearchDialog } from "@/app/capture/_components/numista-image-search-dialog";
+import type { CropRect, CoinFormData } from "@/types/capture";
 import { toast } from "sonner";
+
+const CONDITION_OPTIONS = ["G", "VG", "F", "VF", "XF", "AU", "UNC"] as const;
 
 interface ScannedPage {
   base64: string;
   previewUrl: string;
 }
 
-export default function ErsttagsbriefErfassenPage() {
+export default function BanknoteErfassenPage() {
   const router = useRouter();
   const [saving, setSaving] = useState(false);
 
@@ -35,11 +39,18 @@ export default function ErsttagsbriefErfassenPage() {
   const loadedScanFiles = useRef<Set<string>>(new Set());
 
   // Form
-  const [description, setDescription] = useState("");
+  const [denomination, setDenomination] = useState("");
   const [country, setCountry] = useState("");
   const [year, setYear] = useState("");
+  const [condition, setCondition] = useState("");
+  const [series, setSeries] = useState("");
+  const [description, setDescription] = useState("");
   const [notes, setNotes] = useState("");
   const [estimatedValue, setEstimatedValue] = useState("");
+  const [estimatedCurrency, setEstimatedCurrency] = useState("EUR");
+
+  // Numista metadata (filled by search dialogs)
+  const [numistaData, setNumistaData] = useState<Partial<CoinFormData>>({});
 
   // Check camera status
   useEffect(() => {
@@ -64,7 +75,6 @@ export default function ErsttagsbriefErfassenPage() {
         const res = await fetch("/api/scanner/pending");
         const data = await res.json();
         if (data.count > 0) {
-          // Load new files that haven't been loaded yet
           const newFiles = (data.files as string[]).filter(
             (f) => !loadedScanFiles.current.has(f)
           );
@@ -189,64 +199,94 @@ export default function ErsttagsbriefErfassenPage() {
     });
   }, []);
 
+  // Handle Numista data selection
+  const handleNumistaSelect = useCallback((data: Partial<CoinFormData>) => {
+    setNumistaData(data);
+    if (data.denomination) setDenomination(data.denomination);
+    if (data.country) setCountry(data.country);
+    if (data.year) setYear(String(data.year));
+    if (data.condition) setCondition(data.condition);
+    if (data.series) setSeries(data.series || "");
+    if (data.numistaTitle) setDescription(data.numistaTitle || "");
+    if (data.estimatedValue != null)
+      setEstimatedValue(String(data.estimatedValue));
+    if (data.estimatedCurrency) setEstimatedCurrency(data.estimatedCurrency);
+    toast.success("Numista-Daten übernommen");
+  }, []);
+
   // Build form payload
-  const buildPayload = useCallback(() => ({
-    formData: {
-      itemType: "ersttagsbrief",
-      description: description || "Ersttagsbrief",
-      country: country || "",
-      denomination: "",
-      year: year ? parseInt(year) : null,
-      notes,
-      estimatedValue: estimatedValue ? parseFloat(estimatedValue) : null,
-      estimatedCurrency: "EUR",
-      mintMark: "",
-      material: "",
-      fineness: "",
-      weight: "",
-      diameter: "",
-      thickness: "",
-      condition: "",
-      isProof: false,
-      isFirstDay: true,
-      hasCase: false,
-      hasCertificate: false,
-      edgeType: "",
-      mintage: "",
-      storageLocation: "",
-      tags: [],
-      numistaTypeId: null,
-      numistaTitle: "",
-      numistaUrl: "",
-      shape: "",
-      orientation: "",
-      technique: "",
-      series: "",
-      commemoratedTopic: "",
-      isDemonetized: false,
-      demonetizationDate: "",
-      comments: "",
-      numistaObverseThumbnail: "",
-      numistaReverseThumbnail: "",
-      numistaObverse: null,
-      numistaReverse: null,
-      numistaReferences: null,
-      numistaMints: null,
-      numistaRuler: null,
-      numistaIssues: null,
-      numistaPrices: null,
-      numistaRelatedTypes: null,
+  const buildPayload = useCallback(
+    () => ({
+      formData: {
+        itemType: "banknote",
+        denomination: denomination || "",
+        description: description || denomination || "Banknote",
+        country: country || "",
+        year: year ? parseInt(year) : null,
+        condition: condition || "",
+        series: series || "",
+        notes,
+        estimatedValue: estimatedValue ? parseFloat(estimatedValue) : null,
+        estimatedCurrency,
+        mintMark: "",
+        material: "",
+        fineness: "",
+        weight: "",
+        diameter: "",
+        thickness: "",
+        isProof: false,
+        isFirstDay: false,
+        hasCase: false,
+        hasCertificate: false,
+        edgeType: "",
+        mintage: numistaData.mintage || "",
+        storageLocation: "",
+        tags: numistaData.tags || [],
+        numistaTypeId: numistaData.numistaTypeId || null,
+        numistaTitle: numistaData.numistaTitle || "",
+        numistaUrl: numistaData.numistaUrl || "",
+        shape: numistaData.shape || "",
+        orientation: numistaData.orientation || "",
+        technique: numistaData.technique || "",
+        commemoratedTopic: numistaData.commemoratedTopic || "",
+        isDemonetized: numistaData.isDemonetized || false,
+        demonetizationDate: numistaData.demonetizationDate || "",
+        comments: numistaData.comments || "",
+        numistaObverseThumbnail: numistaData.numistaObverseThumbnail || "",
+        numistaReverseThumbnail: numistaData.numistaReverseThumbnail || "",
+        numistaObverse: numistaData.numistaObverse || null,
+        numistaReverse: numistaData.numistaReverse || null,
+        numistaReferences: numistaData.numistaReferences || null,
+        numistaMints: numistaData.numistaMints || null,
+        numistaRuler: numistaData.numistaRuler || null,
+        numistaIssues: numistaData.numistaIssues || null,
+        numistaPrices: numistaData.numistaPrices || null,
+        numistaRelatedTypes: numistaData.numistaRelatedTypes || null,
+        documentImagesBase64: pages.map((p) => p.base64),
+        collectionId: null,
+        addToNumistaCollection: false,
+        count: null,
+      },
+      frontImageBase64: null,
+      backImageBase64: null,
       documentImagesBase64: pages.map((p) => p.base64),
-      collectionId: null,
-      addToNumistaCollection: false,
-      count: null,
-    },
-    frontImageBase64: null,
-    backImageBase64: null,
-    documentImagesBase64: pages.map((p) => p.base64),
-    frontCrop: null,
-    backCrop: null,
-  }), [pages, description, country, year, notes, estimatedValue]);
+      frontCrop: null,
+      backCrop: null,
+    }),
+    [
+      pages,
+      denomination,
+      description,
+      country,
+      year,
+      condition,
+      series,
+      notes,
+      estimatedValue,
+      estimatedCurrency,
+      numistaData,
+    ]
+  );
 
   // Reset form for next entry
   const resetForm = useCallback(() => {
@@ -255,9 +295,16 @@ export default function ErsttagsbriefErfassenPage() {
     setRawImageUrl(null);
     setRawImageDims(null);
     setCrop(null);
+    setDenomination("");
+    setCountry("");
+    setYear("");
+    setCondition("");
+    setSeries("");
     setDescription("");
     setNotes("");
     setEstimatedValue("");
+    setEstimatedCurrency("EUR");
+    setNumistaData({});
     loadedScanFiles.current = new Set();
   }, [pages]);
 
@@ -276,8 +323,8 @@ export default function ErsttagsbriefErfassenPage() {
       });
       if (!res.ok) throw new Error("Save failed");
       await fetch("/api/scanner/clear", { method: "POST" }).catch(() => {});
-      toast.success("Ersttagsbrief gespeichert!");
-      router.push("/ersttagsbriefe");
+      toast.success("Banknote gespeichert!");
+      router.push("/banknoten");
     } catch {
       toast.error("Fehler beim Speichern");
     } finally {
@@ -285,7 +332,7 @@ export default function ErsttagsbriefErfassenPage() {
     }
   }, [pages, buildPayload, router]);
 
-  // Save and start a new Ersttagsbrief
+  // Save and start a new Banknote
   const handleSaveAndContinue = useCallback(async () => {
     if (pages.length === 0) {
       toast.error("Mindestens ein Bild hinzufügen");
@@ -300,7 +347,7 @@ export default function ErsttagsbriefErfassenPage() {
       });
       if (!res.ok) throw new Error("Save failed");
       await fetch("/api/scanner/clear", { method: "POST" }).catch(() => {});
-      toast.success("Ersttagsbrief gespeichert!");
+      toast.success("Banknote gespeichert!");
       resetForm();
     } catch {
       toast.error("Fehler beim Speichern");
@@ -309,9 +356,13 @@ export default function ErsttagsbriefErfassenPage() {
     }
   }, [pages, buildPayload, resetForm]);
 
+  // First scanned image as front, second as back (for Numista image search)
+  const frontPreviewUrl = pages[0]?.previewUrl;
+  const backPreviewUrl = pages[1]?.previewUrl;
+
   return (
     <div className="container mx-auto max-w-3xl px-4 py-8">
-      <h1 className="mb-6 text-2xl font-bold">Ersttagsbrief erfassen</h1>
+      <h1 className="mb-6 text-2xl font-bold">Banknote erfassen</h1>
 
       {/* Image capture area */}
       {rawImageUrl && rawImageDims ? (
@@ -349,13 +400,13 @@ export default function ErsttagsbriefErfassenPage() {
           {/* Page thumbnails */}
           {pages.length > 0 && (
             <div className="space-y-2">
-              <Label>Seiten ({pages.length})</Label>
+              <Label>Scans ({pages.length})</Label>
               <div className="flex flex-wrap gap-3">
                 {pages.map((page, i) => (
                   <div key={i} className="group relative">
                     <img
                       src={page.previewUrl}
-                      alt={`Seite ${i + 1}`}
+                      alt={`Scan ${i + 1}`}
                       className="h-32 rounded border object-contain"
                     />
                     <button
@@ -365,6 +416,9 @@ export default function ErsttagsbriefErfassenPage() {
                     >
                       ×
                     </button>
+                    <span className="absolute bottom-1 left-1 rounded bg-black/50 px-1 text-[10px] text-white">
+                      {i === 0 ? "Vorderseite" : i === 1 ? "Rückseite" : `Scan ${i + 1}`}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -395,21 +449,59 @@ export default function ErsttagsbriefErfassenPage() {
 
           <p className="text-sm text-muted-foreground">
             Scanne mit Epson Scan 2 nach ~/Scans — Bilder werden automatisch
-            geladen.
+            geladen. Erstes Bild = Vorderseite, zweites = Rückseite.
           </p>
+        </div>
+      )}
+
+      {/* Numista search buttons */}
+      {pages.length > 0 && !rawImageUrl && (
+        <div className="mb-6 flex flex-wrap gap-3">
+          <NumistaSearchDialog
+            onSelect={handleNumistaSelect}
+            category="banknote"
+            frontImageUrl={frontPreviewUrl}
+            backImageUrl={backPreviewUrl}
+          >
+            <Button variant="outline">Numista-Suche</Button>
+          </NumistaSearchDialog>
+          {frontPreviewUrl && (
+            <NumistaImageSearchDialog
+              frontImageUrl={frontPreviewUrl}
+              backImageUrl={backPreviewUrl}
+              category="banknote"
+              onSelect={handleNumistaSelect}
+            >
+              <Button variant="outline">Bilderkennung</Button>
+            </NumistaImageSearchDialog>
+          )}
+          {numistaData.numistaTypeId && (
+            <span className="flex items-center text-xs text-muted-foreground">
+              Numista #{numistaData.numistaTypeId} verknüpft
+            </span>
+          )}
         </div>
       )}
 
       {/* Form fields */}
       <div className="space-y-4">
         <div className="grid grid-cols-3 gap-4">
-          <div className="col-span-2">
-            <Label htmlFor="description">Beschreibung</Label>
+          <div>
+            <Label htmlFor="denomination">Nominal</Label>
             <Input
-              id="description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="z.B. Ersttagsbrief Deutsche Bundespost 1970"
+              id="denomination"
+              value={denomination}
+              onChange={(e) => setDenomination(e.target.value)}
+              placeholder="z.B. 5000 Dinara"
+            />
+          </div>
+          <div>
+            <Label htmlFor="country">Land</Label>
+            <Input
+              id="country"
+              value={country}
+              onChange={(e) => setCountry(e.target.value)}
+              placeholder="z.B. Jugoslawien"
             />
           </div>
           <div>
@@ -419,22 +511,40 @@ export default function ErsttagsbriefErfassenPage() {
               type="number"
               value={year}
               onChange={(e) => setYear(e.target.value)}
-              placeholder="z.B. 1970"
+              placeholder="z.B. 1993"
             />
           </div>
         </div>
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <Label htmlFor="country">Land</Label>
+            <Label htmlFor="condition">Erhaltung</Label>
+            <select
+              id="condition"
+              value={condition}
+              onChange={(e) => setCondition(e.target.value)}
+              className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-xs transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            >
+              <option value="">—</option>
+              {CONDITION_OPTIONS.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <Label htmlFor="series">Serie</Label>
             <Input
-              id="country"
-              value={country}
-              onChange={(e) => setCountry(e.target.value)}
-              placeholder="z.B. Deutschland"
+              id="series"
+              value={series}
+              onChange={(e) => setSeries(e.target.value)}
+              placeholder="z.B. 1993 Reform"
             />
           </div>
           <div>
-            <Label htmlFor="estimatedValue">Schätzwert (EUR)</Label>
+            <Label htmlFor="estimatedValue">
+              Schätzwert ({estimatedCurrency})
+            </Label>
             <Input
               id="estimatedValue"
               type="number"
@@ -444,6 +554,15 @@ export default function ErsttagsbriefErfassenPage() {
               placeholder="z.B. 5.00"
             />
           </div>
+        </div>
+        <div>
+          <Label htmlFor="description">Beschreibung</Label>
+          <Input
+            id="description"
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder="z.B. 5000 Dinara Jugoslawien 1993"
+          />
         </div>
         <div>
           <Label htmlFor="notes">Notizen</Label>
@@ -459,13 +578,17 @@ export default function ErsttagsbriefErfassenPage() {
 
       {/* Save */}
       <div className="mt-6 flex gap-3">
-        <Button variant="ghost" onClick={() => router.push("/ersttagsbriefe")}>
+        <Button variant="ghost" onClick={() => router.push("/banknoten")}>
           Abbrechen
         </Button>
         <Button onClick={handleSave} disabled={saving || pages.length === 0}>
           {saving ? "Speichert..." : "Speichern"}
         </Button>
-        <Button variant="outline" onClick={handleSaveAndContinue} disabled={saving || pages.length === 0}>
+        <Button
+          variant="outline"
+          onClick={handleSaveAndContinue}
+          disabled={saving || pages.length === 0}
+        >
           {saving ? "Speichert..." : "Speichern & Weiter"}
         </Button>
       </div>

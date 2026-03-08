@@ -66,6 +66,7 @@ interface NumistaSearchDialogProps {
   autoOpen?: boolean;
   frontImageUrl?: string;
   backImageUrl?: string;
+  category?: string;
 }
 
 export function NumistaSearchDialog({
@@ -75,6 +76,7 @@ export function NumistaSearchDialog({
   autoOpen = false,
   frontImageUrl,
   backImageUrl,
+  category,
 }: NumistaSearchDialogProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -166,6 +168,7 @@ export function NumistaSearchDialog({
         const params = new URLSearchParams({ q: trimmed });
         if (iss) params.set("issuer", iss);
         if (yr) params.set("year", yr);
+        if (category) params.set("category", category);
 
         const response = await fetch(`/api/numista/search?${params}`);
         if (!response.ok) throw new Error("Search failed");
@@ -434,6 +437,7 @@ export function NumistaSearchDialog({
               <NumistaImageSearchDialog
                 frontImageUrl={frontImageUrl}
                 backImageUrl={backImageUrl}
+                category={category}
                 onSelect={(data) => {
                   onSelect(data);
                   setOpen(false);

@@ -46,6 +46,7 @@ interface NumistaImageSearchDialogProps {
   backImageUrl?: string;
   onSelect: (data: Partial<CoinFormData>) => void;
   children: React.ReactNode;
+  category?: string;
 }
 
 async function blobUrlToFile(url: string, name: string): Promise<File> {
@@ -59,6 +60,7 @@ export function NumistaImageSearchDialog({
   backImageUrl,
   onSelect,
   children,
+  category,
 }: NumistaImageSearchDialogProps) {
   const [open, setOpen] = useState(false);
   const [results, setResults] = useState<NumistaTypePreview[]>([]);
@@ -81,6 +83,7 @@ export function NumistaImageSearchDialog({
 
     try {
       const formData = new FormData();
+      if (category) formData.append("category", category);
       const frontFile = await blobUrlToFile(frontImageUrl, "front.jpg");
       formData.append("front", frontFile);
 
@@ -114,7 +117,7 @@ export function NumistaImageSearchDialog({
     } finally {
       setLoading(false);
     }
-  }, [frontImageUrl, backImageUrl]);
+  }, [frontImageUrl, backImageUrl, category]);
 
   // Auto-search when dialog opens
   useEffect(() => {

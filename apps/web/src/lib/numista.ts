@@ -181,7 +181,8 @@ export interface NumistaImageSearchResult {
 
 export async function searchByImage(
   images: { image_data: string; mime_type: string }[],
-  maxResults: number = 20
+  maxResults: number = 20,
+  category: string = "coin"
 ): Promise<NumistaImageSearchResult> {
   const response = await fetch(
     `${NUMISTA_BASE_URL}/search_by_image?lang=en&activate_experimental_features=true`,
@@ -192,7 +193,7 @@ export async function searchByImage(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        category: "coin",
+        category,
         images,
         max_results: maxResults,
       }),
