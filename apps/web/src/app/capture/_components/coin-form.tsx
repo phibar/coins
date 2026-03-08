@@ -516,6 +516,8 @@ export function CoinForm({
             currentFormData={getValues()}
             onSelect={handleNumistaSelect}
             autoOpen
+            frontImageUrl={frontImageUrl}
+            backImageUrl={backImageUrl}
           >
             <Button type="button" variant="outline" size="sm">
               Numista-Suche

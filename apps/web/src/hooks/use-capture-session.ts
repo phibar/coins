@@ -15,6 +15,19 @@ import type {
   MultiCropItem,
 } from "@/types/capture";
 
+function getGridDefaults(): GridConfig {
+  try {
+    const stored = localStorage.getItem("grid-defaults");
+    if (stored) {
+      const parsed = JSON.parse(stored);
+      return { rows: parsed.rows || 5, cols: parsed.cols || 2, emptySlots: [] };
+    }
+  } catch {
+    // ignore
+  }
+  return { rows: 5, cols: 2, emptySlots: [] };
+}
+
 const initialState: CaptureState = {
   step: "idle",
   mode: null,
@@ -148,7 +161,7 @@ function captureReducer(
         ...state,
         step: "grid_config",
         mode: "grid",
-        gridConfig: { rows: 3, cols: 3, emptySlots: [] },
+        gridConfig: getGridDefaults(),
         gridOverlay: {
           x: state.imageWidth * 0.1,
           y: state.imageHeight * 0.1,
@@ -293,18 +306,26 @@ function captureReducer(
       const cellW = backOverlay.width / gridCfg.cols;
       const cellH = backOverlay.height / gridCfg.rows;
 
-      const coinsWithBack = state.coins.map((coin) => ({
-        ...coin,
-        backCrop:
-          coin.gridRow !== undefined && coin.gridCol !== undefined
-            ? {
-                x: backOverlay.x + coin.gridCol * cellW,
-                y: backOverlay.y + coin.gridRow * cellH,
-                width: cellW,
-                height: cellH,
-              }
-            : coin.frontCrop,
-      }));
+      const coinsWithBack = state.coins.map((coin) => {
+        if (coin.gridRow === undefined || coin.gridCol === undefined) {
+          return { ...coin, backCrop: coin.frontCrop };
+        }
+        // In book flip mode, columns are mirrored horizontally
+        const backCol =
+          state.flipMode === "book"
+            ? gridCfg.cols - 1 - coin.gridCol
+            : coin.gridCol;
+        const backRow = coin.gridRow;
+        return {
+          ...coin,
+          backCrop: {
+            x: backOverlay.x + backCol * cellW,
+            y: backOverlay.y + backRow * cellH,
+            width: cellW,
+            height: cellH,
+          },
+        };
+      });
       return {
         ...state,
         step: "coin_entry",

@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { rotateImage90 } from "@/lib/crop-preview";
 import { toast } from "sonner";
 
@@ -121,6 +123,9 @@ export default function SettingsPage() {
         })}
       </div>
 
+      {/* Grid Defaults */}
+      <GridDefaults />
+
       {/* Camera Setup */}
       <CameraSetup />
 
@@ -152,6 +157,69 @@ export default function SettingsPage() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+function GridDefaults() {
+  const [rows, setRows] = useState(5);
+  const [cols, setCols] = useState(2);
+
+  useEffect(() => {
+    const stored = localStorage.getItem("grid-defaults");
+    if (stored) {
+      try {
+        const parsed = JSON.parse(stored);
+        if (parsed.rows) setRows(parsed.rows);
+        if (parsed.cols) setCols(parsed.cols);
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
+
+  const handleSave = useCallback(() => {
+    localStorage.setItem("grid-defaults", JSON.stringify({ rows, cols }));
+    toast.success(`Raster-Standard ${rows} × ${cols} gespeichert`);
+  }, [rows, cols]);
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle>Raster-Standard</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <p className="text-sm text-muted-foreground">
+          Standard-Rastergröße beim Erfassen mehrerer Münzen pro Foto.
+        </p>
+        <div className="flex items-end gap-4">
+          <div>
+            <Label htmlFor="grid-rows">Zeilen</Label>
+            <Input
+              id="grid-rows"
+              type="number"
+              min={1}
+              max={10}
+              value={rows}
+              onChange={(e) => setRows(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+              className="w-20"
+            />
+          </div>
+          <div>
+            <Label htmlFor="grid-cols">Spalten</Label>
+            <Input
+              id="grid-cols"
+              type="number"
+              min={1}
+              max={10}
+              value={cols}
+              onChange={(e) => setCols(Math.max(1, Math.min(10, parseInt(e.target.value) || 1)))}
+              className="w-20"
+            />
+          </div>
+          <Button onClick={handleSave}>Speichern</Button>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

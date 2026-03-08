@@ -4,16 +4,13 @@ import * as os from "os";
 import { watch, type FSWatcher } from "fs";
 
 const SCAN_FOLDER = path.join(os.homedir(), "Scans");
-const PROCESSED_FOLDER = path.join(SCAN_FOLDER, "processed");
-
 // Pending scanned files (in order of detection)
 let pendingFiles: string[] = [];
 let watcher: FSWatcher | null = null;
 
 export async function startWatching(): Promise<void> {
-  // Ensure folders exist
+  // Ensure folder exists
   await fs.mkdir(SCAN_FOLDER, { recursive: true });
-  await fs.mkdir(PROCESSED_FOLDER, { recursive: true });
 
   // Pick up any existing JPEGs on startup
   await scanForExisting();
@@ -78,9 +75,7 @@ export async function readScanFile(filePath: string): Promise<Buffer> {
 export async function clearPendingScans(): Promise<void> {
   for (const filePath of pendingFiles) {
     try {
-      const filename = path.basename(filePath);
-      const dest = path.join(PROCESSED_FOLDER, filename);
-      await fs.rename(filePath, dest);
+      await fs.unlink(filePath);
     } catch {
       // File may already be gone
     }

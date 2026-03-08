@@ -10,14 +10,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type {
   NumistaTypePreview,
   NumistaTypeDetail,
@@ -25,6 +17,7 @@ import type {
   NumistaPriceResult,
 } from "@/lib/numista";
 import type { CoinFormData } from "@/types/capture";
+import { NumistaImageSearchDialog } from "./numista-image-search-dialog";
 
 // Extended type returned by our API route (detail + issues + prices)
 interface NumistaDetailResponse extends NumistaTypeDetail {
@@ -71,6 +64,8 @@ interface NumistaSearchDialogProps {
   onSelect: (data: Partial<CoinFormData>) => void;
   children: React.ReactNode;
   autoOpen?: boolean;
+  frontImageUrl?: string;
+  backImageUrl?: string;
 }
 
 export function NumistaSearchDialog({
@@ -78,6 +73,8 @@ export function NumistaSearchDialog({
   onSelect,
   children,
   autoOpen = false,
+  frontImageUrl,
+  backImageUrl,
 }: NumistaSearchDialogProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -92,6 +89,7 @@ export function NumistaSearchDialog({
   const debounceRef = useRef<ReturnType<typeof setTimeout>>(undefined);
   const resultsRef = useRef<HTMLDivElement>(null);
   const manuallyClosedRef = useRef(false);
+  const imageSearchBtnRef = useRef<HTMLButtonElement>(null);
 
   // Auto-open on mount
   useEffect(() => {
@@ -323,22 +321,29 @@ export function NumistaSearchDialog({
     if (!open) return;
 
     const handler = (e: KeyboardEvent) => {
-      // In detail view
+      const tag = (e.target as HTMLElement)?.tagName;
+
+      // Cmd+1 for image search (works even in input)
+      if (e.key === "1" && (e.metaKey || e.ctrlKey) && frontImageUrl) {
+        e.preventDefault();
+        imageSearchBtnRef.current?.click();
+        return;
+      }
+
+      // In detail view: ^ goes back, Enter confirms
       if (selectedDetail && !detailLoading) {
         if (e.key === "Enter" && !e.metaKey && !e.ctrlKey) {
           e.preventDefault();
           handleConfirmSelection();
-        } else if (e.key === "^" || e.key === "Dead") {
+        } else if (tag !== "INPUT" && tag !== "TEXTAREA" && (e.key === "^" || e.key === "Dead")) {
           e.preventDefault();
           setSelectedDetail(null);
         }
         return;
       }
 
-      // In results list (not in input)
+      // In results list
       if (results.length > 0 && !loading && !selectedDetail) {
-        const tag = (e.target as HTMLElement)?.tagName;
-        // Allow typing in inputs, but still handle arrows
         if (e.key === "ArrowDown") {
           e.preventDefault();
           setSelectedIndex((prev) => Math.min(prev + 1, results.length - 1));
@@ -346,21 +351,11 @@ export function NumistaSearchDialog({
           e.preventDefault();
           setSelectedIndex((prev) => Math.max(prev - 1, -1));
         } else if (e.key === "Enter" && selectedIndex >= 0) {
-          if (tag === "INPUT") {
-            // Enter in input with selection → open details
-            e.preventDefault();
-            if (e.metaKey || e.ctrlKey) {
-              handleQuickSelect(results[selectedIndex].id);
-            } else {
-              handleSelectType(results[selectedIndex].id);
-            }
+          e.preventDefault();
+          if (e.metaKey || e.ctrlKey) {
+            handleQuickSelect(results[selectedIndex].id);
           } else {
-            e.preventDefault();
-            if (e.metaKey || e.ctrlKey) {
-              handleQuickSelect(results[selectedIndex].id);
-            } else {
-              handleSelectType(results[selectedIndex].id);
-            }
+            handleSelectType(results[selectedIndex].id);
           }
         }
       }
@@ -371,6 +366,7 @@ export function NumistaSearchDialog({
   }, [
     open, results, selectedIndex, selectedDetail, detailLoading, loading,
     handleSelectType, handleQuickSelect, handleConfirmSelection,
+    performSearch, query, issuer, year, frontImageUrl,
   ]);
 
   // Scroll selected result into view
@@ -391,7 +387,7 @@ export function NumistaSearchDialog({
 
         {/* Search form */}
         <div className="space-y-2">
-          <div>
+          <div className="flex gap-2">
             <Input
               id="numista-q"
               value={query}
@@ -404,62 +400,56 @@ export function NumistaSearchDialog({
                   performSearch(query, issuer, year);
                 }
               }}
-              placeholder="z.B. 5 Mark, 10 Euro oder Numista-ID (12345)..."
+              placeholder="z.B. 5 Mark, 10 Euro oder Numista-ID..."
               autoFocus
+              className="flex-1"
+            />
+            <Input
+              id="numista-year"
+              value={year}
+              onChange={(e) => {
+                setYear(e.target.value);
+                handleSearchChange(query, issuer, e.target.value);
+              }}
+              placeholder="Jahr"
+              className="w-20"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && selectedIndex < 0) {
+                  e.preventDefault();
+                  performSearch(query, issuer, year);
+                }
+              }}
             />
           </div>
-          <div className="grid grid-cols-[1fr_auto_auto] gap-2 items-end">
-            <div>
-              <Label className="text-xs">Land</Label>
-              <Select
-                value={issuer}
-                onValueChange={(val) => {
-                  const v = val === "__all__" ? "" : val;
-                  setIssuer(v);
-                  handleSearchChange(query, v, year);
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={() => setOpen(false)}
+            >
+              Abbrechen
+            </Button>
+            {frontImageUrl && (
+              <NumistaImageSearchDialog
+                frontImageUrl={frontImageUrl}
+                backImageUrl={backImageUrl}
+                onSelect={(data) => {
+                  onSelect(data);
+                  setOpen(false);
                 }}
               >
-                <SelectTrigger>
-                  <SelectValue placeholder="Alle Länder" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ISSUER_OPTIONS.map((opt) => (
-                    <SelectItem
-                      key={opt.value || "__all__"}
-                      value={opt.value || "__all__"}
-                    >
-                      {opt.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div>
-              <Label htmlFor="numista-year" className="text-xs">
-                Jahr
-              </Label>
-              <Input
-                id="numista-year"
-                value={year}
-                onChange={(e) => {
-                  setYear(e.target.value);
-                  handleSearchChange(query, issuer, e.target.value);
-                }}
-                placeholder="1970"
-                className="w-24"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && selectedIndex < 0) {
-                    e.preventDefault();
-                    performSearch(query, issuer, year);
-                  }
-                }}
-              />
-            </div>
+                <Button type="button" size="sm" variant="outline" ref={imageSearchBtnRef}>
+                  Bildersuche <kbd className="ml-1 text-[10px] opacity-60 border rounded px-1">⌘1</kbd>
+                </Button>
+              </NumistaImageSearchDialog>
+            )}
             <Button
               type="button"
               size="sm"
               onClick={() => performSearch(query, issuer, year)}
               disabled={loading || (query.trim().length < 2 && !/^\d+$/.test(query.trim()))}
+              className="ml-auto"
             >
               Suchen
             </Button>
