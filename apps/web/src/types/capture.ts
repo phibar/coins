@@ -286,6 +286,7 @@ export type CaptureAction =
   | { type: "GO_TO_COIN"; index: number }
   | { type: "RETAKE_FRONT"; photo: string; width: number; height: number }
   | { type: "RETAKE_BACK_PHOTO"; photo: string; width: number; height: number }
+  | { type: "DELETE_COIN"; index: number }
   | { type: "SAVE_COIN" }
   | { type: "COIN_SAVED" }
   | { type: "SET_SESSION_DEFAULTS"; defaults: Partial<CoinFormData> }

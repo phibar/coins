@@ -701,6 +701,17 @@ function captureReducer(
       }
       return state;
 
+    case "DELETE_COIN": {
+      if (state.coins.length <= 1) return state;
+      const newCoins = state.coins.filter((_, i) => i !== action.index);
+      const newIndex = state.currentCoinIndex >= newCoins.length
+        ? newCoins.length - 1
+        : state.currentCoinIndex > action.index
+          ? state.currentCoinIndex - 1
+          : state.currentCoinIndex;
+      return { ...state, coins: newCoins, currentCoinIndex: newIndex };
+    }
+
     case "SAVE_COIN":
       return { ...state, step: "saving" };
 

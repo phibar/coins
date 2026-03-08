@@ -47,6 +47,7 @@ interface CoinFormProps {
   onSaveAndContinue: (data: CoinFormData) => void;
   onSaveAndNew: (data: CoinFormData) => void;
   onSaveAndExit: (data: CoinFormData) => void;
+  onSaveAll?: (data: CoinFormData) => void;
   onSkip?: () => void;
   coinIndex?: number;
   totalCoins?: number;
@@ -64,6 +65,7 @@ export function CoinForm({
   onSaveAndContinue,
   onSaveAndNew,
   onSaveAndExit,
+  onSaveAll,
   onSkip,
   coinIndex,
   totalCoins,
@@ -362,11 +364,13 @@ export function CoinForm({
   };
 
   // Save mode: which save button was pressed
-  const saveModeRef = useRef<"continue" | "new" | "exit">("continue");
+  const saveModeRef = useRef<"continue" | "new" | "exit" | "all">("continue");
 
   const handleFormSubmit = useCallback(
     (data: CoinFormData) => {
-      if (saveModeRef.current === "new") {
+      if (saveModeRef.current === "all") {
+        onSaveAll?.(data);
+      } else if (saveModeRef.current === "new") {
         onSaveAndNew(data);
       } else if (saveModeRef.current === "exit") {
         onSaveAndExit(data);
@@ -374,7 +378,7 @@ export function CoinForm({
         onSaveAndContinue(data);
       }
     },
-    [onSaveAndContinue, onSaveAndNew, onSaveAndExit]
+    [onSaveAndContinue, onSaveAndNew, onSaveAndExit, onSaveAll]
   );
 
   // Cmd+Enter to save
@@ -428,6 +432,17 @@ export function CoinForm({
           >
             Speichern &amp; Beenden
           </Button>
+          {onSaveAll && (
+            <Button
+              type="submit"
+              variant="secondary"
+              size="sm"
+              disabled={saving}
+              onClick={() => { saveModeRef.current = "all"; }}
+            >
+              {saving ? "..." : "Alle speichern"}
+            </Button>
+          )}
           {onSkip && (
             <Button type="button" variant="ghost" size="sm" onClick={onSkip}>
               Überspringen

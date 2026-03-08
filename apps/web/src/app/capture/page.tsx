@@ -327,39 +327,29 @@ export default function CapturePage() {
   }, [state.backPhoto, state.backImageWidth, state.backImageHeight, rotating, dispatch]);
 
   // Save coin handler with three modes
+  // Convert blob URL to base64
+  const fetchImageBase64 = useCallback(async (url: string): Promise<string> => {
+    const response = await fetch(url);
+    const blob = await response.blob();
+    const arrayBuffer = await blob.arrayBuffer();
+    return btoa(
+      new Uint8Array(arrayBuffer).reduce(
+        (data, byte) => data + String.fromCharCode(byte),
+        ""
+      )
+    );
+  }, []);
+
   const doSaveCoin = useCallback(
-    async (formData: CoinFormData): Promise<boolean> => {
+    async (formData: CoinFormData, coinIndex?: number): Promise<boolean> => {
       dispatch({ type: "SAVE_COIN" });
       setSaving(true);
 
       try {
-        const currentCoin = state.coins[state.currentCoinIndex];
-        let frontImageBase64: string | null = null;
-        let backImageBase64: string | null = null;
-
-        if (state.frontPhoto) {
-          const response = await fetch(state.frontPhoto);
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
-          frontImageBase64 = btoa(
-            new Uint8Array(arrayBuffer).reduce(
-              (data, byte) => data + String.fromCharCode(byte),
-              ""
-            )
-          );
-        }
-
-        if (state.backPhoto) {
-          const response = await fetch(state.backPhoto);
-          const blob = await response.blob();
-          const arrayBuffer = await blob.arrayBuffer();
-          backImageBase64 = btoa(
-            new Uint8Array(arrayBuffer).reduce(
-              (data, byte) => data + String.fromCharCode(byte),
-              ""
-            )
-          );
-        }
+        const idx = coinIndex ?? state.currentCoinIndex;
+        const coin = state.coins[idx];
+        const frontImageBase64 = state.frontPhoto ? await fetchImageBase64(state.frontPhoto) : null;
+        const backImageBase64 = state.backPhoto ? await fetchImageBase64(state.backPhoto) : null;
 
         const res = await fetch("/api/coins", {
           method: "POST",
@@ -369,8 +359,8 @@ export default function CapturePage() {
             frontImageBase64,
             backImageBase64,
             documentImagesBase64: formData.documentImagesBase64 || [],
-            frontCrop: currentCoin?.frontCrop,
-            backCrop: currentCoin?.backCrop,
+            frontCrop: coin?.frontCrop,
+            backCrop: coin?.backCrop,
           }),
         });
 
@@ -387,7 +377,7 @@ export default function CapturePage() {
         setSaving(false);
       }
     },
-    [state, dispatch]
+    [state, dispatch, fetchImageBase64]
   );
 
   const handleSaveAndContinue = useCallback(
@@ -434,6 +424,68 @@ export default function CapturePage() {
       router.push("/collection");
     },
     [doSaveCoin, router, state.currentCoinIndex]
+  );
+
+  const handleSaveAll = useCallback(
+    async (formData: CoinFormData) => {
+      setSaving(true);
+      dispatch({ type: "SAVE_COIN" });
+
+      try {
+        // Pre-fetch images once
+        const frontImageBase64 = state.frontPhoto ? await fetchImageBase64(state.frontPhoto) : null;
+        const backImageBase64 = state.backPhoto ? await fetchImageBase64(state.backPhoto) : null;
+
+        let savedCount = 0;
+        let failedCount = 0;
+
+        for (let idx = 0; idx < state.coins.length; idx++) {
+          // Skip already saved or skipped coins
+          if (savedCoinIndices.has(idx) || skippedCoinIndices.has(idx)) continue;
+
+          const coin = state.coins[idx];
+          try {
+            const res = await fetch("/api/coins", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                formData,
+                frontImageBase64,
+                backImageBase64,
+                documentImagesBase64: formData.documentImagesBase64 || [],
+                frontCrop: coin?.frontCrop,
+                backCrop: coin?.backCrop,
+              }),
+            });
+
+            if (!res.ok) throw new Error("Save failed");
+            savedCount++;
+            setSavedCoinIndices((prev) => new Set(prev).add(idx));
+          } catch {
+            failedCount++;
+          }
+        }
+
+        if (failedCount > 0) {
+          toast.error(`${failedCount} Münze(n) fehlgeschlagen`);
+        } else {
+          toast.success(`${savedCount} Münze(n) gespeichert!`);
+        }
+
+        dispatch({ type: "SET_SESSION_DEFAULTS", defaults: formData });
+        dispatch({ type: "CONTINUE_WITH_SESSION" });
+        autoCaptured.current = false;
+        if (cameraConnected) {
+          setTimeout(() => capturePhoto(), 100);
+        }
+      } catch {
+        toast.error("Fehler beim Speichern");
+        dispatch({ type: "CAPTURE_FAILED" });
+      } finally {
+        setSaving(false);
+      }
+    },
+    [state, dispatch, fetchImageBase64, savedCoinIndices, skippedCoinIndices, cameraConnected, capturePhoto]
   );
 
   // Check if all coins are handled (saved or skipped) after saving the current one
@@ -1545,10 +1597,13 @@ export default function CapturePage() {
                   const isSkipped = skippedCoinIndices.has(idx);
                   const thumb = coinThumbnails.get(idx);
                   return (
-                    <button
+                    <div
                       key={idx}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => dispatch({ type: "GO_TO_COIN", index: idx })}
-                      className={`flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-sm transition-colors ${
+                      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") dispatch({ type: "GO_TO_COIN", index: idx }); }}
+                      className={`group flex w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left text-sm transition-colors cursor-pointer ${
                         isCurrent
                           ? "border-primary bg-primary/10 font-medium"
                           : isSaved
@@ -1583,7 +1638,30 @@ export default function CapturePage() {
                       {isSkipped && (
                         <span className="text-xs text-muted-foreground">–</span>
                       )}
-                    </button>
+                      {!isSaved && state.coins.length > 1 && (
+                        <button
+                          type="button"
+                          className="ml-auto text-xs text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            dispatch({ type: "DELETE_COIN", index: idx });
+                            setSavedCoinIndices((prev) => {
+                              const next = new Set<number>();
+                              prev.forEach((i) => { if (i < idx) next.add(i); else if (i > idx) next.add(i - 1); });
+                              return next;
+                            });
+                            setSkippedCoinIndices((prev) => {
+                              const next = new Set<number>();
+                              prev.forEach((i) => { if (i < idx) next.add(i); else if (i > idx) next.add(i - 1); });
+                              return next;
+                            });
+                          }}
+                          title="Entfernen"
+                        >
+                          ✕
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1612,6 +1690,7 @@ export default function CapturePage() {
                   onSaveAndContinue={handleSaveAndContinue}
                   onSaveAndNew={handleSaveAndNew}
                   onSaveAndExit={handleSaveAndExit}
+                  onSaveAll={state.coins.length > 1 ? handleSaveAll : undefined}
                   onSkip={
                     state.coins.length > 1
                       ? () => {
