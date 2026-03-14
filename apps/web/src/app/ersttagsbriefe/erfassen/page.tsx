@@ -8,6 +8,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { PhotoCanvas } from "@/app/capture/_components/photo-canvas";
 import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import type { CropRect } from "@/types/capture";
 import { toast } from "sonner";
 
@@ -33,6 +40,17 @@ export default function ErsttagsbriefErfassenPage() {
   const [crop, setCrop] = useState<CropRect | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const loadedScanFiles = useRef<Set<string>>(new Set());
+
+  // Collections
+  const [collections, setCollections] = useState<{ id: string; name: string }[]>([]);
+  const [collectionId, setCollectionId] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetch("/api/collections")
+      .then((r) => r.json())
+      .then((data) => setCollections(data))
+      .catch(() => {});
+  }, []);
 
   // Form
   const [description, setDescription] = useState("");
@@ -237,7 +255,7 @@ export default function ErsttagsbriefErfassenPage() {
       numistaPrices: null,
       numistaRelatedTypes: null,
       documentImagesBase64: pages.map((p) => p.base64),
-      collectionId: null,
+      collectionId,
       addToNumistaCollection: false,
       count: null,
     },
@@ -246,7 +264,7 @@ export default function ErsttagsbriefErfassenPage() {
     documentImagesBase64: pages.map((p) => p.base64),
     frontCrop: null,
     backCrop: null,
-  }), [pages, description, country, year, notes, estimatedValue]);
+  }), [pages, description, country, year, notes, estimatedValue, collectionId]);
 
   // Reset form for next entry
   const resetForm = useCallback(() => {
@@ -454,6 +472,25 @@ export default function ErsttagsbriefErfassenPage() {
             placeholder="Anmerkungen..."
             rows={3}
           />
+        </div>
+        <div>
+          <Label>Sammlung</Label>
+          <Select
+            value={collectionId || "none"}
+            onValueChange={(val) => setCollectionId(val === "none" ? null : val)}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Keine Sammlung" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">Keine Sammlung</SelectItem>
+              {collections.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </div>
       </div>
 

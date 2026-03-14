@@ -8,6 +8,7 @@ interface ErsttagsbriefePageProps {
   searchParams: Promise<{
     page?: string;
     q?: string;
+    collectionId?: string;
   }>;
 }
 
@@ -19,6 +20,7 @@ export default async function ErsttagsbriefePage({
 
   const where: Record<string, unknown> = { itemType: "ersttagsbrief" };
 
+  if (params.collectionId) where.collectionId = params.collectionId;
   if (params.q) {
     where.OR = [
       { description: { contains: params.q, mode: "insensitive" } },
@@ -27,15 +29,23 @@ export default async function ErsttagsbriefePage({
     ];
   }
 
-  const [items, total] = await Promise.all([
+  const [items, total, collections] = await Promise.all([
     prisma.coin.findMany({
       where,
-      include: { images: { take: 1, orderBy: { sortOrder: "asc" } } },
+      include: {
+        images: { take: 1, orderBy: { sortOrder: "asc" } },
+        collection: { select: { id: true, name: true } },
+      },
       orderBy: { createdAt: "desc" },
       skip: (page - 1) * PAGE_SIZE,
       take: PAGE_SIZE,
     }),
     prisma.coin.count({ where }),
+    prisma.collection.findMany({
+      where: { coins: { some: { itemType: "ersttagsbrief" } } },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true },
+    }),
   ]);
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -56,6 +66,35 @@ export default async function ErsttagsbriefePage({
           + Ersttagsbrief erfassen
         </Link>
       </div>
+
+      {/* Collection filter */}
+      {collections.length > 0 && (
+        <div className="mb-4 flex flex-wrap gap-2">
+          <Link
+            href="/ersttagsbriefe"
+            className={`rounded-full px-3 py-1 text-sm ${
+              !params.collectionId
+                ? "bg-primary text-primary-foreground"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            Alle
+          </Link>
+          {collections.map((c) => (
+            <Link
+              key={c.id}
+              href={`/ersttagsbriefe?collectionId=${c.id}`}
+              className={`rounded-full px-3 py-1 text-sm ${
+                params.collectionId === c.id
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+              }`}
+            >
+              {c.name}
+            </Link>
+          ))}
+        </div>
+      )}
 
       {items.length === 0 ? (
         <div className="py-16 text-center">
@@ -94,6 +133,11 @@ export default async function ErsttagsbriefePage({
                 <p className="truncate text-xs text-muted-foreground">
                   {[item.country, item.year].filter(Boolean).join(" ")}
                 </p>
+                {item.collection && (
+                  <p className="truncate text-xs text-primary/70">
+                    {item.collection.name}
+                  </p>
+                )}
               </div>
             </Link>
           ))}
