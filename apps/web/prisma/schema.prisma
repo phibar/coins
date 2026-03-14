@@ -198,6 +198,7 @@ enum ItemType {
   coin           // Muenze
   ersttagsbrief  // Ersttagsbrief (First Day Cover)
   banknote       // Banknote
+  muenzsatz      // Kursmünzsatz (Coin Set)
 }
 
 enum ImageType {

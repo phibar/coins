@@ -5,14 +5,20 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useCaptureSession } from "@/hooks/use-capture-session";
+import { useCoinSetSession } from "@/hooks/use-coin-set-session";
 import { PhotoCanvas } from "./_components/photo-canvas";
 import { GridCanvas } from "./_components/grid-canvas";
 import { GridConfigPanel } from "./_components/grid-config-panel";
 import { MultiCropCanvas } from "./_components/multi-crop-canvas";
 import { MultiConfigPanel } from "./_components/multi-config-panel";
 import { CoinForm } from "./_components/coin-form";
+import { CoinSetSetup } from "./_components/coin-set-setup";
+import { CoinSetProgress } from "./_components/coin-set-progress";
 import type { CollectionWithImages } from "./_components/coin-form";
 import type { CoinFormData, CropRect, MultiCropItem } from "@/types/capture";
+import type { CoinSetSessionConfig } from "@/types/coin-set";
+import { buildSetFormData } from "@/types/coin-set";
+import { EMPTY_COIN_FORM } from "@/types/capture";
 import { toast } from "sonner";
 import { generateCropPreviewUrl, rotateImage90 } from "@/lib/crop-preview";
 
@@ -59,6 +65,10 @@ export default function CapturePage() {
   const [saving, setSaving] = useState(false);
   const [savedCoinIndices, setSavedCoinIndices] = useState<Set<number>>(new Set());
   const [skippedCoinIndices, setSkippedCoinIndices] = useState<Set<number>>(new Set());
+
+  // Coin set (Kursmünzsatz) session
+  const coinSet = useCoinSetSession();
+  const [showSetSetup, setShowSetSetup] = useState(false);
 
   // Reset tracking sets when session resets (state goes back to idle)
   useEffect(() => {
@@ -496,6 +506,129 @@ export default function CapturePage() {
     [state, dispatch, fetchImageBase64, savedCoinIndices, skippedCoinIndices, cameraConnected, capturePhoto]
   );
 
+  // --- Coin Set (Kursmünzsatz) handlers ---
+
+  const handleStartSetSession = useCallback(
+    async (config: CoinSetSessionConfig) => {
+      // Auto-create a collection if none selected
+      if (!config.collectionId) {
+        const setLabel = config.setType === "dm" ? "KMS DM" : "KMS Euro";
+        const name = `${setLabel} ${config.year} ${config.country}`.trim();
+        try {
+          const res = await fetch("/api/collections", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name }),
+          });
+          if (res.ok) {
+            const created = await res.json();
+            config = { ...config, collectionId: created.id };
+            setCollections((prev) => [...prev, { id: created.id, name: created.name, images: [] }]);
+          }
+        } catch {
+          // proceed without collection
+        }
+      }
+      coinSet.startSession(config);
+      setShowSetSetup(false);
+      // Photo is already captured — go straight to single crop
+      dispatch({ type: "SELECT_MODE", mode: "single" });
+    },
+    [coinSet, dispatch]
+  );
+
+  // Auto-select single mode when set session is active and we're at select_mode
+  // (for 2nd+ mint marks — first one goes through setup form)
+  useEffect(() => {
+    if (!coinSet.state.active || !coinSet.state.config) return;
+    if (coinSet.isAllDone) return;
+    if (showSetSetup) return; // don't auto-select while setup form is showing
+
+    if (state.step === "select_mode") {
+      dispatch({ type: "SELECT_MODE", mode: "single" });
+    }
+  }, [coinSet.state.active, coinSet.state.config, coinSet.isAllDone, showSetSetup, state.step, dispatch]);
+
+  // Inject saved front crop when entering single_crop during set session
+  useEffect(() => {
+    if (!coinSet.state.active || !coinSet.state.savedFrontCrop) return;
+    if (state.step === "single_crop" && !state.singleCrop) {
+      dispatch({ type: "SET_SINGLE_CROP", crop: coinSet.state.savedFrontCrop });
+    }
+  }, [coinSet.state.active, coinSet.state.savedFrontCrop, state.step, state.singleCrop, dispatch]);
+
+  // Inject saved back crop when entering single_back_crop during set session
+  useEffect(() => {
+    if (!coinSet.state.active || !coinSet.state.savedBackCrop) return;
+    if (state.step === "single_back_crop" && !state.singleBackCrop) {
+      dispatch({ type: "SET_SINGLE_BACK_CROP", crop: coinSet.state.savedBackCrop });
+    }
+  }, [coinSet.state.active, coinSet.state.savedBackCrop, state.step, state.singleBackCrop, dispatch]);
+
+  // Auto-save when coin_entry is reached during set session
+  const autoSaveRef = useRef(false);
+  useEffect(() => {
+    if (!coinSet.state.active || !coinSet.state.config) return;
+    if (state.step !== "coin_entry") return;
+    if (coinSet.isAllDone) return;
+    if (autoSaveRef.current) return; // prevent double-fire
+    autoSaveRef.current = true;
+
+    const config = coinSet.state.config;
+    const mintMark = coinSet.currentMintMark;
+    const isLast = coinSet.isLastMint;
+
+    // Save crops for reuse
+    const currentCoin = state.coins[state.currentCoinIndex];
+    if (currentCoin) {
+      coinSet.saveCrops(currentCoin.frontCrop ?? null, currentCoin.backCrop ?? null);
+    }
+
+    // Build form data and auto-save
+    const setFormData = buildSetFormData(config, mintMark);
+    const formData: CoinFormData = { ...EMPTY_COIN_FORM, ...setFormData };
+
+    (async () => {
+      const ok = await doSaveCoin(formData);
+      autoSaveRef.current = false;
+      if (ok) {
+        coinSet.completeMint();
+        dispatch({ type: "CONTINUE_WITH_SESSION" });
+        autoCaptured.current = false;
+        // Auto-capture next mint mark
+        if (!isLast && cameraConnected) {
+          setTimeout(() => capturePhoto(), 100);
+        }
+      }
+    })();
+  }, [
+    coinSet.state.active, coinSet.state.config, coinSet.isAllDone,
+    coinSet.isLastMint, coinSet.currentMintMark,
+    state.step, state.coins, state.currentCoinIndex,
+    coinSet.saveCrops, coinSet.completeMint,
+    doSaveCoin, dispatch, cameraConnected, capturePhoto,
+  ]);
+
+  // Handle set session skip mint
+  const handleSetSkipMint = useCallback(() => {
+    coinSet.skipMint();
+    if (state.step !== "idle") {
+      dispatch({ type: "CONTINUE_WITH_SESSION" });
+    }
+    autoCaptured.current = false;
+    if (cameraConnected) {
+      setTimeout(() => capturePhoto(), 100);
+    }
+  }, [coinSet, state.step, dispatch, cameraConnected, capturePhoto]);
+
+  // Handle set session cancel
+  const handleSetCancel = useCallback(() => {
+    coinSet.endSession();
+    if (state.step !== "idle") {
+      dispatch({ type: "RESET" });
+    }
+  }, [coinSet, state.step, dispatch]);
+
   // Check if all coins are handled (saved or skipped) after saving the current one
   const allHandledAfterSave = state.coins.length <= 1 || state.coins.every((_, idx) =>
     idx === state.currentCoinIndex || savedCoinIndices.has(idx) || skippedCoinIndices.has(idx)
@@ -629,6 +762,20 @@ export default function CapturePage() {
       // Skip if a dialog is open
       if (document.querySelector("[role=dialog]")) return;
 
+      // KMS session shortcuts (active across all steps)
+      if (coinSet.state.active && !coinSet.isAllDone) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          handleSetCancel();
+          return;
+        }
+        if (e.key === "Tab" && !e.shiftKey && coinSet.state.config && coinSet.state.config.mintMarks.length > 1) {
+          e.preventDefault();
+          handleSetSkipMint();
+          return;
+        }
+      }
+
       const step = state.step;
 
       if (step === "idle") {
@@ -655,10 +802,13 @@ export default function CapturePage() {
         } else if (e.key === "5") {
           e.preventDefault();
           dispatch({ type: "MARK_AS_BACK" });
+        } else if ((e.key === "k" || e.key === "K") && !showSetSetup) {
+          e.preventDefault();
+          setShowSetSetup(true);
         } else if (e.key === " ") {
           e.preventDefault();
           // Space = default = Einzelmünze
-          dispatch({ type: "SELECT_MODE", mode: "single" });
+          if (!showSetSetup) dispatch({ type: "SELECT_MODE", mode: "single" });
         } else if (e.key === "^" || e.key === "Dead") {
           e.preventDefault();
           if (cameraConnected && !retaking) retakeFront();
@@ -836,7 +986,11 @@ export default function CapturePage() {
   }, [
     state.step, state.multiCrops, state.multiBackCrops,
     state.selectedMultiCropId, state.currentCoinIndex, state.coins.length,
-    rotating, retaking, gridCoinCount,
+    state.singleCrop, state.singleBackCrop,
+    state.numisbriefCrop, state.numisbriefBackCrop,
+    rotating, retaking, gridCoinCount, showSetSetup,
+    coinSet.state.active, coinSet.isAllDone, coinSet.state.config,
+    handleSetCancel, handleSetSkipMint,
     cameraConnected, capturePhoto, captureBackPhoto, captureNumisbriefBack,
     handleRotateFront, handleRotateBack, handleCaptureBack,
     retakeFront, retakeBack, dispatch,
@@ -862,8 +1016,47 @@ export default function CapturePage() {
         className="hidden"
       />
 
+      {/* Coin set progress bar */}
+      {coinSet.state.active && coinSet.state.config && (
+        <div className="mb-4">
+          <CoinSetProgress
+            state={coinSet.state}
+            onSkip={handleSetSkipMint}
+            onCancel={handleSetCancel}
+          />
+        </div>
+      )}
+
+      {/* Coin set: all done */}
+      {coinSet.state.active && coinSet.isAllDone && state.step === "idle" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border bg-green-500/10 p-4 text-center">
+            <p className="text-lg font-semibold">
+              {coinSet.state.config?.year}{" "}
+              {coinSet.state.config?.setType === "dm" ? "DM-Satz" : "Euro-Satz"}{" "}
+              fertig!
+            </p>
+            <p className="text-sm text-muted-foreground">
+              {coinSet.state.completedMints.length} Prägezeichen gespeichert
+            </p>
+          </div>
+          <div className="flex gap-3 justify-center">
+            <Button onClick={() => {
+              coinSet.endSession();
+              autoCaptured.current = false;
+              if (cameraConnected) capturePhoto();
+            }}>
+              Weiter fotografieren
+            </Button>
+            <Button variant="outline" onClick={() => { coinSet.endSession(); router.push("/collection"); }}>
+              Zur Sammlung
+            </Button>
+          </div>
+        </div>
+      )}
+
       {/* Step: Idle */}
-      {state.step === "idle" && (
+      {state.step === "idle" && !(coinSet.state.active && coinSet.isAllDone) && (
         <div className="flex gap-4">
           {cameraConnected ? (
             <Button size="lg" onClick={capturePhoto}>
@@ -939,6 +1132,13 @@ export default function CapturePage() {
             >
               Dies ist die Rückseite<Kbd>5</Kbd>
             </Button>
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={() => setShowSetSetup(true)}
+            >
+              Kursmünzsatz<Kbd>K</Kbd>
+            </Button>
             {cameraConnected && (
               <Button
                 size="lg"
@@ -950,7 +1150,15 @@ export default function CapturePage() {
               </Button>
             )}
           </div>
-          {state.frontPhoto && (
+          {/* Coin set setup form (overlays the photo preview) */}
+          {showSetSetup && (
+            <CoinSetSetup
+              collections={collections}
+              onStart={handleStartSetSession}
+              onCancel={() => setShowSetSetup(false)}
+            />
+          )}
+          {state.frontPhoto && !showSetSetup && (
             <div className="flex justify-center">
               <img
                 src={state.frontPhoto}
@@ -1568,8 +1776,19 @@ export default function CapturePage() {
         </div>
       )}
 
-      {/* Step: Coin entry */}
-      {state.step === "coin_entry" && (
+      {/* Step: Coin entry — auto-save for set session */}
+      {state.step === "coin_entry" && coinSet.state.active && (
+        <div className="flex items-center gap-3">
+          <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+          <span>
+            {coinSet.state.config?.setType === "dm" ? "KMS DM" : "KMS Euro"}{" "}
+            {coinSet.state.config?.year} ({coinSet.currentMintMark}) wird gespeichert...
+          </span>
+        </div>
+      )}
+
+      {/* Step: Coin entry — normal form */}
+      {state.step === "coin_entry" && !coinSet.state.active && (
         <div className={state.coins.length > 1 ? "flex gap-6" : ""}>
           {/* Coin sidebar for multi-coin */}
           {state.coins.length > 1 && (

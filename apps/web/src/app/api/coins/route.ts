@@ -253,7 +253,7 @@ export async function GET(request: NextRequest) {
   const where: Record<string, unknown> = {};
 
   if (itemType) where.itemType = itemType;
-  else where.itemType = "coin"; // Default to coins only
+  else where.itemType = { in: ["coin", "muenzsatz"] }; // Default to coins + sets
   if (country) where.country = country;
   if (denomination) where.denomination = { contains: denomination, mode: "insensitive" };
   if (year) where.year = parseInt(year);

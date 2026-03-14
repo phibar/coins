@@ -60,7 +60,24 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
     }),
   ]);
 
+  // Fetch set siblings for Kursmünzsatz items
+  const setSiblings =
+    coin.itemType === "muenzsatz" && coin.year && coin.denomination
+      ? await prisma.coin.findMany({
+          where: {
+            itemType: "muenzsatz",
+            year: coin.year,
+            denomination: coin.denomination,
+            country: coin.country,
+            id: { not: coin.id },
+          },
+          include: { images: { where: { type: "obverse" }, take: 1 } },
+          orderBy: { mintMark: "asc" },
+        })
+      : [];
+
   const isErsttagsbrief = coin.itemType === "ersttagsbrief";
+  const isMuenzsatz = coin.itemType === "muenzsatz";
   const backUrl = isErsttagsbrief ? "/ersttagsbriefe" : "/collection";
   const backLabel = isErsttagsbrief ? "Zurück zu Ersttagsbriefen" : "Zurück zur Sammlung";
 
@@ -135,6 +152,52 @@ export default async function CoinDetailPage({ params }: DetailPageProps) {
           </Link>
         )}
       </div>
+
+      {/* Set siblings (Kursmünzsatz) */}
+      {isMuenzsatz && setSiblings.length > 0 && (
+        <div className="mb-6">
+          <p className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
+            Satz
+          </p>
+          <div className="flex gap-2">
+            {/* Current item */}
+            {[coin, ...setSiblings]
+              .sort((a, b) => (a.mintMark ?? "").localeCompare(b.mintMark ?? ""))
+              .map((item) => {
+                const isCurrent = item.id === coin.id;
+                const thumb = item.images.find((i: { type: string }) => i.type === "obverse");
+                return (
+                  <Link
+                    key={item.id}
+                    href={`/collection/${item.id}`}
+                    className={`flex flex-col items-center rounded-lg border p-1.5 transition-colors ${
+                      isCurrent
+                        ? "border-primary bg-primary/10"
+                        : "border-border hover:bg-accent"
+                    }`}
+                  >
+                    <div className="h-16 w-16 overflow-hidden rounded bg-muted">
+                      {thumb && "thumbnailUrl" in thumb && thumb.thumbnailUrl ? (
+                        <img
+                          src={thumb.thumbnailUrl as string}
+                          alt={item.mintMark ?? ""}
+                          className="h-full w-full object-cover"
+                        />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
+                          –
+                        </div>
+                      )}
+                    </div>
+                    <span className={`mt-1 text-xs font-bold ${isCurrent ? "text-primary" : "text-muted-foreground"}`}>
+                      {item.mintMark || "–"}
+                    </span>
+                  </Link>
+                );
+              })}
+          </div>
+        </div>
+      )}
 
       {/* Images */}
       <div className="mb-6 grid gap-4 sm:grid-cols-2">

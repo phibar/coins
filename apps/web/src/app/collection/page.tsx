@@ -38,13 +38,13 @@ async function getFilterOptions() {
     prisma.coin.findMany({
       select: { country: true },
       distinct: ["country"],
-      where: { itemType: "coin", country: { not: null } },
+      where: { itemType: { in: ["coin", "muenzsatz"] }, country: { not: null } },
       orderBy: { country: "asc" },
     }),
     prisma.coin.findMany({
       select: { denomination: true },
       distinct: ["denomination"],
-      where: { itemType: "coin", denomination: { not: null } },
+      where: { itemType: { in: ["coin", "muenzsatz"] }, denomination: { not: null } },
       orderBy: { denomination: "asc" },
     }),
     prisma.collection.findMany({
@@ -117,7 +117,7 @@ export default async function CollectionPage({
     q,
   } = params;
 
-  const where: Record<string, unknown> = { itemType: "coin" };
+  const where: Record<string, unknown> = { itemType: { in: ["coin", "muenzsatz"] } };
 
   if (country) where.country = country;
   if (denomination)

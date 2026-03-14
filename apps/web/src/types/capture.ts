@@ -98,7 +98,7 @@ export interface NumistaRelatedType {
 }
 
 export interface CoinFormData {
-  itemType: "coin" | "ersttagsbrief";
+  itemType: "coin" | "ersttagsbrief" | "muenzsatz";
   country: string;
   denomination: string;
   year: number | null;
